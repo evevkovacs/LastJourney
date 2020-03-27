@@ -12,8 +12,8 @@ import struct
 from struct import pack
 from struct import unpack, calcsize
 
-#import matplotlib
-#matplotlib.use('Agg')
+import matplotlib
+matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 import matplotlib.colors as colors
 import pydot
