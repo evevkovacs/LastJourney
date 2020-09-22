@@ -16,25 +16,31 @@ import matplotlib
 matplotlib.use('Agg')
 from matplotlib import pyplot as plt
 import matplotlib.colors as colors
-import pydot
+from matplotlib.colors import ListedColormap
+#import pydot
+import pydotplus as pydot
+from matplotlib import rc
+rc('font',**{'family':'sans-serif','sans-serif':['Helvetica']})
+rc('text', usetex=True)
 
-#cc_template = '09_03_2019.AQ.{}.corepropertiesextend.hdf5'
-cc_template = '{}.corepropertiesextend.hdf5'
+default_sim = 'LJ'
+
+filenames = {'AQ':'',
+             'LJ':'m000p-',
+            }
+cc_template = '{}{}.corepropertiesextend.hdf5'
 binfile_template = 'trees_099.{}'
-coredir = '../CoreCatalogs'
-#treedir = '../CoreTrees'
-#treedir = '../CoreTrees/test'
-#treedir = '../CoreTrees/new_snaps'
-#treedir = '../CoreTrees/relative'
-treedir = '../CoreTrees/fof_group'
-#mkey = 'm_evolved_0.8_0.02'
-mkey = 'm_evolved_0.9_0.005'
+
+mkeys = {'AQ':'m_evolved_0.9_0.005',
+        'LJ':'m_evolved_1.1_0.1',
+       }
+
 outfile_template = re.sub('propertiesextend', 'trees', cc_template)
 
 coretag = 'core_tag'
 foftag = 'fof_halo_tag'
 coremass = 'coremass'
-infall_fof_mass = 'infall_fof_halo_mass'
+#infall_fof_mass = 'infall_fof_halo_mass'
 infall_tree_node_mass = 'infall_tree_node_mass'
 first_snap = 499
 last_snap = 43
@@ -59,6 +65,7 @@ NextHaloInFOFGroupOffset = NextHaloInFOFGroup + Offset
 Len = 'Len'
 Zero = 'Zero'
 SnapNum = 'SnapNum'
+M_Crit200 = 'M_Crit200'
 
 # properties for storing in dict or matrices
 core_pointers = [Descendent, DescendentOffset, FirstProgenitor, NextProgenitor,
@@ -70,7 +77,7 @@ core_properties_float = {'Pos_x':'x', 'Pos_y':'y', 'Pos_z':'z',
                          'Vel_x':'vx', 'Vel_y':'vy', 'Vel_z':'vz',
                          'VelDisp':'vel_disp',
                          'Vmax': 'infall_fof_halo_max_cir_vel',
-                         'M_Crit200': infall_fof_mass,
+                         M_Crit200: infall_tree_node_mass,
                          'M_Mean200': Zero,
                          'M_TopHat': Zero,
                          'Spin_x': 'infall_sod_halo_angmom_x',
@@ -90,7 +97,7 @@ derived_properties_int = [SnapNum, Len, ParentHaloTag]
 # vector properties for storing in matrix
 integer_properties = core_pointers + sibling_pointers + derived_properties_int + list(core_properties_int.keys())
 float_properties = list(core_properties_float.keys())
-#float_properties = ['M_Crit200']
+#float_properties = [M_Crit200]
 
 #serial properties for storing in dict
 core_properties = dict(zip(float_properties, [core_properties_float[f] for f in float_properties]))
@@ -99,16 +106,18 @@ derived_properties = derived_properties_int
 
 no_int = -999
 no_float = -999.
-particle_mass_AQ = 1.15e9 #M_sun/h
-particle_mass_LJ = 1.15e9 #M_sun/h
-particle_mass_MT = 1.15e9 #M_sun/h
+#masses in #M_sun/h
+particle_masses = {'AQ':1.15e9,
+                   'LJ':2.7e9,
+                   'MT':6.88e6,
+                  } 
 
 # header file contains Ntrees, totNHalos, TreeNHalos
 header_format = "<{}i"
 
 struct_keys = [DescendentOffset, FirstProgenitorOffset, NextProgenitorOffset,
                FirstHaloInFOFGroupOffset, NextHaloInFOFGroupOffset,
-               Len, 'M_Mean200', 'M_Crit200', 'M_TopHat',
+               Len, 'M_Mean200', M_Crit200, 'M_TopHat',
                'Pos_x', 'Pos_y', 'Pos_z', 'Vel_x', 'Vel_y', 'Vel_z',
                'VelDisp', 'Vmax', 'Spin_x', 'Spin_y', 'Spin_z',
                MostBoundID_Coretag, SnapNum, 'FileNr',
@@ -119,7 +128,7 @@ struct_format = "<iiiiiiffffffffffffffqiiif"
 #test
 struct_keys = [DescendentOffset, FirstProgenitorOffset, NextProgenitorOffset,
                FirstHaloInFOFGroupOffset, NextHaloInFOFGroupOffset,
-               Len, 'M_Crit200', MostBoundID_Coretag,
+               Len, M_Crit200, MostBoundID_Coretag,
 #               SnapNum, SubhaloIndex,
               ] 
 
@@ -128,25 +137,32 @@ struct_format = "<iiiiiifq"
 """
 
 # cc = build_core_trees.get_core_snapshot( '../CoreCatalogs', snapshot)
-def get_core_snapshot(coredir, snapshot, template=cc_template):
-    fn = os.path.join(coredir, cc_template.format(snapshot))
+def get_core_snapshot(coredir, snapshot, template=cc_template, sim=default_sim):
+    fn = os.path.join(coredir, cc_template.format(filenames[sim], snapshot))
     data= {}
     if os.path.exists(fn):
         h5 = h5py.File(fn, 'r')
         coredata = h5['coredata']
         keys = [k for k in list(coredata.keys()) if 'm_evolved' not in k]    
-        for k in keys + [mkey]:
+        for k in keys + [mkeys[sim]]:
             data[k] = coredata[k][()]
     else:
         print('{} not found'.format(fn))
 
     return data
 
-def add_coremass_column(corecat):
+def add_coremass_column(corecat, sim=default_sim):
     mask = (corecat['central']==1) # get centrals
-    central_mass = corecat[infall_tree_node_mass][mask] # get fof mass
-    corecat[coremass] = corecat[mkey] # get evolved masses
-    corecat[coremass][mask] = central_mass
+    central_mass = corecat[infall_tree_node_mass][mask] # get fof mass (possibly fragment)
+    corecat[coremass] = corecat[mkeys[sim]] # get evolved masses
+    # the mass of centrals are not modeled by mass model 
+    central_massmodel = corecat[coremass][mask]
+    check_mass = np.count_nonzero(~np.isclose(central_mass, central_massmodel)) #check if any entries don't agree
+    if check_mass > 0:
+        print('Mass model != tree-node mass for central cores in {}/{} entries'.format(check_mass,
+                                                                                                np.count_nonzero(mask))) 
+        corecat[coremass][mask] = central_mass  #force mass for centrals = tree-node mass
+    
     return corecat
     
 def clean(corecat, sorted_coretags):
@@ -158,7 +174,7 @@ def clean(corecat, sorted_coretags):
 
     return corecat
 
-def add_snapshot_to_trees(coretrees, corecat, current_snap, snap_index=0,
+def add_snapshot_to_trees(coretrees, corecat, current_snap, sim, snap_index=0,
                           print_int=100, coretags_fofm=None, argsorted_fofm=None,
                           sorted_indices=None,
                           ncore_min=0, ncore_max=None, vector=False): 
@@ -207,7 +223,8 @@ def add_snapshot_to_trees(coretrees, corecat, current_snap, snap_index=0,
             atime1 = time()
             prop_values = get_ordered_property(p, corecat, sorted_indices_this,
                                                snap_index, current_snap,
-                                               first_siblings, next_siblings, foftags_fofm_this)
+                                               first_siblings, next_siblings, foftags_fofm_this,
+                                               particle_mass=particle_masses[sim])
             atimes.append((time()-atime1)/60.)
             #fill row of property matrix with values for selected entries
             v[snap_index][locations_this] = prop_values
@@ -262,7 +279,8 @@ def add_snapshot_to_trees(coretrees, corecat, current_snap, snap_index=0,
                         coretrees[s] = {}
                     coretrees[s] = add_properties_to_tree(s, loc, coretrees[s], corecat,
                                                           next_sibling, siblings[0],
-                                                          snap_index, current_snap, p)
+                                                          snap_index, current_snap, p,
+                                                          particle_mass=particle_masses[sim])
                 atimes.append((time()-atime1)/60.)
                 if npar % print_int == 0 and npar > 0:
                     print('Time to loop over {} parents = {:.2g} minutes'.format(npar, (time() - ptime1)/60.))
@@ -346,7 +364,7 @@ def fix_firstprogenitor_vector(first_progenitor, row):
     return first_progenitor
 
 def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap,
-                         first_siblings, next_siblings, parent_tags):
+                         first_siblings, next_siblings, parent_tags, particle_mass=particle_masses[default_sim]):
     ncores = len(corecat[coretag]) # = len(sorted_indices_this)
     if Descendent in p:
         prop_values = np.array([row - 1]*ncores) #row = row of matrix array
@@ -381,9 +399,10 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap,
             prop_values = corecat[core_properties_float[p]][sorted_indices_this] # reorder into sorted coretag order
             if 'M_Crit' in p:
                 mask = (corecat['central'][sorted_indices_this]==0) # select non-centrals
-                prop_values[mask] = 0.   # set staellite masses to 0.
+                prop_values[mask] = 0.   # set satellite masses to 0.
+                prop_values[~mask] /= particle_mass
             if 'Spin' in p:
-                prop_values /= corecat[infall_fof_mass][sorted_indices_this]
+                prop_values /= corecat[infall_tree_node_mass][sorted_indices_this]
                 
     else:
         print('Unknown property {}'.format(p))
@@ -405,7 +424,7 @@ def fix_first_progenitors(coretrees, coretags_not_this, snap_index):
 #@numba.jit(nopython=True)
 def add_properties_to_tree(core_tag, location, coretree, corecat,
                            next_sibling, first_sibling, snap_index,
-                           current_snap, parent_fof_tag):
+                           current_snap, parent_fof_tag, particle_mass=particle_masses[default_sim]):
     if not coretree:  # empty - first entry
         coretree[Descendent] = [-1] # no descendent for first halo
         coretree[DescendentOffset] = [-1] # no descendent for first halo
@@ -453,10 +472,13 @@ def add_properties_to_tree(core_tag, location, coretree, corecat,
                 coretree[p].append(0.)
         else:
             coretree[p].append(corecat[v][location])
-            if 'M_Crit' in p and corecat['central'][location] == 0:
-                coretree[p][-1] = 0.  #overwrite last entry with zero for satellite
+            if 'M_Crit' in p:
+                if corecat['central'][location] == 0:
+                    coretree[p][-1] = 0.  #overwrite last entry with zero for satellite
+                else:
+                    coretree[p][-1] /= particle_mass
             if 'Spin' in p:
-                coretree[p][-1] /= corecat[infall_fof_mass][location] # divide by mass
+                coretree[p][-1] /= corecat[infall_tree_node_mass][location] # divide by mass
                 
     return coretree
 
@@ -572,7 +594,9 @@ def read_outfile(outfile, vector=True):
 
                 offset = offset + nhalos
         else:
-            print('Not available yet')
+            for k in fh['trees'].keys():
+                coretrees[k] = fh['trees'][k][()]
+                
     return coretrees, Ntrees, totNHalos, TreeNHalos, coretags
         
 def read_binary(outfile, vector=True):
@@ -597,7 +621,7 @@ def read_binary(outfile, vector=True):
                 
         print('Read {} trees with total {} halos'.format(Ntrees, totNhalos))
 
-    return trees
+    return trees, Ntrees, totNhalos, halos_per_tree
 
 def write_binary(outfile, coretrees, cores_to_write, foftags_to_write,
                  vector=True, start=None, end=None, column_counts=None):
@@ -632,7 +656,7 @@ def write_binary(outfile, coretrees, cores_to_write, foftags_to_write,
         values = [Ntrees, totNHalos] + halos_per_tree.tolist()
         header_this = header_format.format(Ntrees + 2)
         fh.write(pack(header_this, *values))
-        print('Wrote header for {} fof trees with {} halos'.format(Ntrees, totNHalos))
+        print('Wrote header for {} FoF trees with {} halos'.format(Ntrees, totNHalos))
         
         if vector:
             assert np.array_equal(foftags_to_write, coretrees[ParentHaloTag][0, start:end]), "ParentHaloTags not in fofm order"
@@ -642,7 +666,7 @@ def write_binary(outfile, coretrees, cores_to_write, foftags_to_write,
             # write struct for each tree (ie forest) (cores in same parent halo at z=0)
             column = start
             for fof_count in fof_counts[fof_group_order]:
-                offset = 0   #reset offset for each tree
+                offset = 0   #reset offset for each fof group
                 for col, count in zip(np.arange(column, column + fof_count),
                                       column_counts[column-start:column-start+fof_count]):  #column counts are restarted for each file
                     coretrees = add_offsets(coretrees, col, offset, count)
@@ -738,7 +762,10 @@ def replace_sibling_addresses(coretrees, col, column_counts, start, first_column
             for ns, sib in enumerate(unique_sibs):
                 if sib > 0:   #skip -1 entries
                     loc = np.where(coretrees[MostBoundID_Coretag][0]==sib)[0][0]
-                    assert loc >= first_column_in_tree, "Sibling location is outside of tree"
+                    if loc < first_column_in_tree:
+                        print("For p {}: {}th sibling {} with location {} outside of {}th tree ".format(p, ns, sib, loc, col))
+                        print("Substituting pointer to first halo in tree")
+                        loc = first_column_in_tree
                     offset = np.sum(column_counts[first_column_in_tree:loc])
                     sib_mask = (inverse==ns) & mask
                     coretrees[p + Offset][:, col][0:column_counts[cindx]][sib_mask] = offset + rows[sib_mask]
@@ -786,21 +813,29 @@ def main(argv):
     ncore_min = int(argv.get(4, 0))    #for serial code
     ncore_max = int(argv.get(5, 67760)) #for serial code (number of cores)/100
     Nfiles = int(argv.get(6, 10000)) #total number of files for vector code
+    sim = argv.get(7, 'LJ')  # set simulation
     name = argv.get(0, 'test')
+    coredir = '../CoreCatalogs_{}'.format(sim)
+    outname = '{}_{}'.format(sim, name) if 'test' in name else sim 
+    treedir = '../CoreTrees/fof_group_{}'.format(outname)
+
+    print('Simulation = {}'.format(sim))
     print('Outputs written to {}'.format(treedir))
+    print('Writing {} file(s) out of a total of {}'.format(nfiles, Nfiles))
+    print('Reading core catalog from {}'.format(coredir))
     
     process = psutil.Process(os.getpid())
     
     corefiles = glob.glob(coredir+'/*')
-    snapshots = sorted([int(os.path.basename(f).split('.')[0]) for f in corefiles], reverse=True)  
+    snapshots = sorted([int(os.path.basename(f).split('.')[0].split('-')[-1]) for f in corefiles], reverse=True)
     coretrees = {}
 
     for n, s in enumerate(snapshots): #process in descending order
         print('Processing snapshot {}'.format(s))
         stime = time() 
-        corecat = get_core_snapshot(coredir, int(s))
+        corecat = get_core_snapshot(coredir, int(s), sim=sim)
         if corecat:
-            corecat = add_coremass_column(corecat)
+            corecat = add_coremass_column(corecat, sim=sim)
             if n == 0:
                 sorted_coretags = np.sort(corecat[coretag]) #save for cleaning earlier snaps
 
@@ -826,7 +861,7 @@ def main(argv):
                 # clean corecat to remove cores that disappeared before step 499
                 corecat = clean(corecat, sorted_coretags)
             
-            coretrees, atimes, stimes = add_snapshot_to_trees(coretrees, corecat, int(s), snap_index=n,
+            coretrees, atimes, stimes = add_snapshot_to_trees(coretrees, corecat, int(s), sim, snap_index=n,
                                                               coretags_fofm=coretags_fofm,
                                                               argsorted_fofm=argsorted_coretags_fofm,
                                                               sorted_indices=indices_fofm,
@@ -860,7 +895,7 @@ def main(argv):
     print('Writing subsets of {} cores in {} files with stride {}'.format(numcores, nfiles, stride))
     
     for n in range(nfiles):
-        fn = os.path.join(treedir, outfile_template.format(n)+mode)
+        fn = os.path.join(treedir, outfile_template.format('', n)+mode)
         fn_bin = os.path.join(treedir, binfile_template.format(n)+mode)
         end = int(min(start + stride, numcores))
         # check that end is on a parent boundary
@@ -884,163 +919,254 @@ def main(argv):
     #return coretrees #for testing
     # eg to run: serialtrees = build_core_trees.main({0:'test', 1:'serial', 2:2, 3:500, 4:0, 5:500})
     # coretrees = build_core_trees.main({0:'test', 1:'vector', 2:2})
+    # coretrees = build_core_trees.main({0:'test', 1:'vector', 2:1, 3:500, 4:0, 5:500, 6:1, 7:'LJ'})  #write out 1 file
     # testtree = build_core_trees.main({0:'test', 1:'serial', 2:1, 3:400, 4:246, 5:247})
+    # eg to run from command line
+    # python build_core_trees.py vector 1 500 0 500 1 LJ |& tee ../logfiles/LJ_v0.1.log
     if 'test' in name:
         return coretrees
     else:
         return
 
 
-MyGreen='cc'
-MyBlue='ee'
-MyRed='dd'
-ColorScale=255
 color_cl = 'lightgrey'
-fontcolor='black'
 outlinecolor='blue'
 first_halo_arrow = 'seagreen'
 next_halo_arrow = 'limegreen'
 first_prog_arrow = 'orangered'
-next_prog_arrow = 'orange'
+next_prog_arrow = 'cyan'
 desc_arrow = 'orchid'
+next_fof_arrow = 'blue'
 
 # outfile='../CoreTrees/trees_099.0.vector'
-# trees=build_core_trees.read_binary(outfile)
-# treegraph, clusters, nodes = build_core_trees.drawforest(trees, 4)
-
-def getnodecolor(mass, logm_min, logm_max, n_min=20, particle_mass=particle_mass_AQ):
-    logm_model = math.log10(n_min*particle_mass)
-    logm_range = logm_max - logm_min
-    lo_m_range = logm_model - logm_min
-    logm = math.log10(mass)
-    if logm >= logm_model:
-        ired=int((logm_max - math.log10(mass))/logm_range*ColorScale)
-        nodecolor=setRGBcolor(ired, MyGreen, MyBlue)
-    else:                                      #use alt color scale for masses below model range
-        iblue=int((logm_model - math.log10(mass))/lo_m_range*ColorScale)
-        nodecolor=setRGBcolor(MyRed, MyGreen, iblue)
-
-    return nodecolor
-
-def setRGBcolor(red, green, blue):
-    red = check_color(red)
-    green = check_color(green)
-    blue = check_color(blue)
-    rgbcolor='#'+red+green+blue
-    return rgbcolor
-
-def check_color(color):
-    if(type(color) == int):
-        hexcol = re.sub('^0x', '' ,hex(color))
-        color = str(hexcol) if len(hexcol) >= 2 else '0' +hexcol
-    return color
-
-def get_mass_limits(trees):
-    mass_min = min([np.min(trees[i][Len]) for i in range(len(trees))])
-    mass_max = max([np.max(trees[i][Len]) for i in range(len(trees))])
-    print('min(mass/m_p) = {}; max(mass/m_p) = {}'.format(mass_min, mass_max))
+# trees, Ntrees, totNhalos, halos_per_tree = build_core_trees.read_binary(outfile)
+# coretrees, Ntrees, totNHalos, TreeNHalos, coretags = build_core_trees.read_outfile(outfile)
+def get_mass_limits(trees, key=Len):
+    mass_min = min([np.min(trees[i][key][trees[i][key] > 0.]) for i in range(len(trees)) if np.count_nonzero(trees[i][key] > 0.) > 0])
+    mass_max = max([np.max(trees[i][key][trees[i][key] > 0.]) for i in range(len(trees)) if np.count_nonzero(trees[i][key] > 0.) > 0])
+    mass_id = 'Core/Subhalo' if key==Len else 'Parent Halo'
+    print('{} mass/m_p limits: min = {:.1f}; max = {:.1f}'.format(mass_id, mass_min, mass_max))
     return mass_min, mass_max
 
-def drawforest(trees, treenum, filetype='.png', particle_mass=particle_mass_AQ, cmap='YlOrRd',
-               mass_min=1, mass_max=None):
+#Examples of usage
+# treegraph, clusters, nodes = build_core_trees.drawforest(trees, 4)
+# Note options mass_min, compresses, MTtrees
+#treegraph, clusters, nodes, node_names, first_progenitors, next_progenitors = build_core_trees.drawforest(mttrees, 28727, compressed=False, xname='mt', MTtrees=True)
+#treegraph, clusters, nodes, node_names, first_progenitors, next_progenitors = build_core_trees.drawforest(trees, 79, compressed=False, xname='reduced')
+#treegraph, clusters, nodes, node_names, first_progenitors, next_progenitors = build_core_trees.drawforest(oldtrees, 79, compressed=False)
 
+def drawforest(trees, treenum, filetype='.png', sim=default_sim, cmap='Purples',
+               clmap='Wistia', clfont='black', fof_mass_min=None, fof_mass_max=None, fontcolor='black',
+               mass_min=1, mass_max=None, alpha_halo=0.75, alpha_fof=0.5, compressed=True, MTtrees=False, xname=''): #pink_r is too light
+
+    particle_mass=particle_masses[sim]
     tree = trees[treenum]
-    if mass_max is None:
-        mass_min, mass_max = get_mass_limits(trees)
-
-    treegraph = pydot.Dot(graph_type='digraph', compound='true', rankdir="BT",
-                          labelloc='c', labeljust='c', ranksep=0.2, style="filled")
+    if mass_max is None or mass_min is None:
+        cmass_min, cmass_max = get_mass_limits(trees)
+    mass_min = cmass_min if mass_min is None else mass_min
+    mass_max = cmass_max if mass_max is None else mass_max
+    if fof_mass_max is None or fof_mass_min is None:
+        fmass_min, fmass_max = get_mass_limits(trees, key=M_Crit200)
+    fof_mass_min = fmass_min if fof_mass_min is None else fof_mass_min
+    fof_mass_max = fmass_max if fof_mass_max is None else fof_mass_max
+        
+    treegraph = pydot.Dot(graph_type="digraph", compound='true', rankdir="BT",
+                          labelloc="c", labeljust="c", style="filled") #draws bottom to top only if newrank=True (see below)
     clusters = []
     nodes = []
+    node_names= []
     logm_min = np.min(np.log10(tree[Len]*particle_mass))
     logm_max = np.max(np.log10(tree[Len]*particle_mass))
-    print('log(m_min) = {:.2g}; log(m_max) = {:.2g}'.format(logm_min, logm_max))
+    print('Tree {}: log(m_min) = {:.2g}; log(m_max) = {:.2g}'.format(treenum, logm_min, logm_max))
     nsnaps = len(np.unique(tree['SnapNum']))
     norm = colors.LogNorm(vmin=mass_min*particle_mass, vmax=mass_max*particle_mass)
-    cm =plt.get_cmap(cmap)
+    cm = plt.get_cmap(cmap)
+    norm_halo = colors.LogNorm(vmin=fof_mass_min*particle_mass, vmax=fof_mass_max*particle_mass)
+    #get fof halo color map
+    cm_halo = plt.get_cmap(clmap)
+    # get code for rgb transparency
+    trans_fof = hex(int(round(255*alpha_fof)))[-2:]
+    trans_halo = hex(int(round(255*alpha_halo)))[-2:]
+    
+    first_progenitors = []
+    next_progenitors = []
+    snaps = np.arange(np.min(tree[SnapNum]), np.max(tree[SnapNum]+1))[::-1]
 
     #loop through snapshots; assign clusters and nodes
-    for sidx, snap in enumerate(np.arange(np.min(tree[SnapNum]), np.max(tree[SnapNum]+1))[::-1]):
+    for sidx, snap in enumerate(snaps):
         print('Processing snapshot {}'.format(snap))
         locs = np.where(tree[SnapNum]==snap)[0]
+        #print('locs ', locs)
         coretags = tree[MostBoundID_Coretag][locs]
         masses = tree[Len][locs]*particle_mass
-        next_progenitors = tree[NextProgenitorOffset][locs]
+        lengths = tree[Len][locs]
         first_halos = tree[FirstHaloInFOFGroupOffset][locs]
+        next_halos = tree[NextHaloInFOFGroupOffset][locs]
         unique_halos, index, counts = np.unique(first_halos, return_index=True,
                                                 return_counts=True)
         orig_order = index.argsort()
         fof_groups = unique_halos[orig_order]
-        fof_counts = counts[orig_order]
-        cl_this = [pydot.Cluster('FoF'+str(f), label='FoF'+str(f), color=color_cl, rankdir="LR") for f in fof_groups]
+        halo_mlengths = tree[M_Crit200][fof_groups]
+        halo_masses = tree[M_Crit200][fof_groups]*particle_mass
+        labels_cl = ['FoF #{}; Coretag = {}'.format(str(f), tree[MostBoundID_Coretag][f]) for f in fof_groups]
+        newrank = [f==0 for f in range(len(fof_groups))]
+        if not MTtrees:  #add infall halo mass of fof group to label
+            labels_cl = [labels_cl[i] + '\n M = {:.2e} M./h ({:.2f})'.format(halo_masses[i],
+                                                                        halo_mlengths[i]) for i in range(len(fof_groups))]
+            colors_rgb = [cm_halo(norm_halo(halomass)) for halomass in halo_masses]
+            colors_cl = [colors.to_hex(c) + trans_fof for c in colors_rgb]
+        else:
+            colors_cl = [color_cl for f in fof_groups]
+
+        # define subgraphs of clusters
+        cl_this = [pydot.Cluster('FoF'+str(fof_groups[f]), label=labels_cl[f],
+                                 color=colors_cl[f], fontcolor=clfont,
+                                 newrank=newrank[f], rankdir='LR', rank='max') for f in range(len(fof_groups))] 
+
         #assign nodes to clusters and add edges
         nodes_this = []
-        offset = 0
-        for cl, fof_count in zip(cl_this, fof_counts):
+        node_names_this = []
+        first_progenitors_this = []
+        next_progenitors_this = []
+        for ncl, (cl, fof_group) in enumerate(zip(cl_this, fof_groups)):
+
             nodes_fof = []
-            for nidx in np.arange(fof_count):
-                lidx = offset + nidx
-                node_name = str(locs[lidx]) #label node by location
-                node_label = '{}\n{}\n{:.2e}'.format(locs[lidx], coretags[lidx], masses[lidx])
-                #color_fp = getnodecolor(masses[lidx], logm_min, logm_max) #, nsnaps, cmap=cmap)
-                color_fp = colors.to_hex(cm(norm(masses[lidx])))
-                node = pydot.Node(node_name, style="filled", label=node_label,
-                                  color=outlinecolor, fillcolor=cm(norm(masses[lidx])), fontcolor=fontcolor)
+            mask = (first_halos==fof_group)
+            locs_in_fof = locs[mask]  #find locs in this fof_group
+            coretags_in_fof = coretags[mask]
+            masses_in_fof = masses[mask]
+            lengths_in_fof = lengths[mask]
+            first_progs = tree[FirstProgenitorOffset][locs][mask]
+            next_progs = tree[NextProgenitorOffset][locs][mask]
+            #add node
+            for loc, ctag, mass, l, fpr, npr in zip(locs_in_fof, coretags_in_fof, masses_in_fof,
+                                                  lengths_in_fof, first_progs, next_progs):
+                node_name = str(loc) #label node by location
+                node_label = "Node {}, Snap {}\n id={}\n M={:.2e} M./h (Len = {})".format(node_name, snap, ctag, mass, l)
+                color_fp = colors.to_hex(cm(norm(mass))) + trans_halo
+                node = pydot.Node(node_name, label=node_label, fillcolor=color_fp, style="filled",
+                                  color=outlinecolor, fontcolor=fontcolor)
                 cl.add_node(node)
-                #print("added node", node.get_name())
-                #save in node lists
                 nodes_fof.append(node)
+                # save nodes and node names and progenitors in identical order for ease in later searches
                 nodes_this.append(node)
+                node_names_this.append(node_name)
+                first_progenitors_this.append(fpr)
+
+                next_progenitors_this.append(npr)
 
             treegraph.add_subgraph(cl)  # add subgraphs for each cluster
-            #add edges for first and next halos
-            for nidx in np.arange(fof_count):
-                treegraph.add_edge(pydot.Edge(nodes_fof[nidx], nodes_fof[0], color=first_halo_arrow, style='dashed'))
-                if nidx > 0:
-                    treegraph.add_edge(pydot.Edge(nodes_fof[nidx-1], nodes_fof[nidx], color=next_halo_arrow))
+            
+            #now add edges for first and next halos and next_progenitors in this fof_group
+            for nidx, (node, next_node_loc, next_prog_loc) in enumerate(zip(nodes_fof, next_halos[mask], next_progs)):
+                # To save space, only add first halo arrow for first halo to itself if compressing plot
+                if nidx==0 or not compressed:
+                    treegraph.add_edge(pydot.Edge(node, nodes_fof[0], color=first_halo_arrow, style="dashed"))
+                if next_node_loc != -1:
+                    if next_node_loc in locs_in_fof:
+                        nn_idx = locs_in_fof.tolist().index(next_node_loc)
+                        treegraph.add_edge(pydot.Edge(node, nodes_fof[nn_idx], color=next_halo_arrow))
+                    else:
+                        print('Error: next halo {} for node {} not found in snap {}'.format(next_node_loc, node.get_name(), snap))
 
-            offset += fof_count #go to next FoF group in snapshot
+                #add edges for next progenitors in current snap (should account for same fof group instances in LJ trees)
+                if next_prog_loc != -1:
+                    if next_prog_loc in locs_in_fof:   #is next progenitor in current snap in this fof_group?
+                        np_idx = locs_in_fof.tolist().index(next_prog_loc)  #get its location
+                        treegraph.add_edge(pydot.Edge(node, nodes_fof[np_idx], color=next_prog_arrow))  #arrow from node to location
+                        #replace next prog with -1 since it has been accounted for
+                        next_progenitors_this[nidx] = -1
+                            
+            #add invisible edge between last node in previous fof_group and first node in this group
+            if ncl > 0:
+                treegraph.add_edge(pydot.Edge(nodes_this[-len(nodes_fof) - 1], nodes_fof[0],
+                                              ltail=cl_this[ncl-1].get_name(), lhead=cl.get_name(),  color=next_fof_arrow))
+                                  
+            #add edges for descendents progenitors and next progenitors connecting to nodes in this fof group
+            if sidx > 0:
+                #names = [nd.get_name() for nd in nodes_fof]
+                #allsgraphs = treegraph.get_subgraph_list()
+                #for sg in allsgraphs:
+                #    print("Cluster",sg.get_name(),':',sg.get_attributes())
+                #alledges = treegraph.get_edge_list()
+                #for edge in alledges:
+                #    print("Edge",edge.get_source(),"to",edge.get_destination(),edge.get_attributes())
 
-        #add edges for progenitors and descendents for all nodes in snapshot
-        if sidx > 0:
-            descendent_nodes = nodes[sidx - 1]
-            desc_names = [nd.get_name() for nd in descendent_nodes]
-            #print("desc names", desc_names)
-            #allsgraphs = treegraph.get_subgraph_list()
-            #for sg in allsgraphs:
-            #    print("Cluster",sg.get_name(),':',sg.get_attributes())
-            #alledges = treegraph.get_edge_list()
-            #for edge in alledges:
-            #    print("Edge",edge.get_source(),"to",edge.get_destination(),edge.get_attributes())
+                descendents = list(map(str, tree[DescendentOffset][locs_in_fof])) #all descendents in fof_group
+                for node, desc in zip(nodes_fof, descendents):
+                    # find desc node in any previous snapshots (for MT trees descendents may skip snapshots)
+                    if MTtrees:
+                        desc_loc = [(n, node_names[n].index(desc)) for n in range(len(node_names)) if desc in node_names[n]]
+                    else:  #in previous snapshot
+                        desc_loc = [(n, node_names[n].index(desc)) for n in range(sidx-1, sidx) if desc in node_names[n]]
+                    if desc_loc:
+                        if len(desc_loc) > 1:
+                            print('Error: multiple descendant locations found for descendant {} for node {} in snap {}'.format(desc,
+                                                                                                                               node.get_name(),
+                                                                                                                               snap))
+                        else:
+                            treegraph.add_edge(pydot.Edge(node, nodes[desc_loc[0][0]][desc_loc[0][1]], color=desc_arrow))
+                    else:
+                        print('Error: decscendent node {} not found in snapshots < {} for node {}'.format(desc, snap, node.get_name()))
+                                           
+                    #search for node in progenitors or nextprogenitors by searching over previous snapshots
+                    name = int(node.get_name())
+                    #search progenitors for node name (= location)
+                    if MTtrees:
+                        fprog_loc = [(n, first_progenitors[n].index(name)) for n in range(len(first_progenitors)) if name in first_progenitors[n]]
+                        nprog_loc = [(n, next_progenitors[n].index(name)) for n in range(len(next_progenitors)) if name in next_progenitors[n]]
+                    else:  #search in previous time step
+                        fprog_loc = [(n, first_progenitors[n].index(name)) for n in range(sidx-1, sidx) if name in first_progenitors[n]]
+                        nprog_loc = [(n, next_progenitors[n].index(name)) for n in range(sidx-1, sidx) if name in next_progenitors[n]]
+                        if nprog_loc:
+                            print('Error: next progenitor {} for node {} found in previous snap {}'.format(nprog_loc, name,
+                                                                                                           snaps[nprog_loc[0][0]]))
+                    if fprog_loc:  #location in progenitor list matches location in nodes list
+                        treegraph.add_edge(pydot.Edge(nodes[fprog_loc[0][0]][fprog_loc[0][1]], node, color=first_prog_arrow))
+                        #replace this progenitor with -1 for consistency check at end of code
+                        first_progenitors[fprog_loc[0][0]][fprog_loc[0][1]] = -1
+                    if nprog_loc:
+                        #add edge from previous node to progenitor 
+                        treegraph.add_edge(pydot.Edge(nodes[nprog_loc[0][0]][nprog_loc[0][1]], node, color=next_prog_arrow))
+                        #replace this progenitor with -1 for consistency check at end of code
+                        next_progenitors[nprog_loc[0][0]][nprog_loc[0][1]] = -1
 
-            descendents = tree[DescendentOffset][locs]
-            for node, desc in zip(nodes_this, descendents):
-                desc_node = descendent_nodes[desc_names.index(str(desc))]
-                treegraph.add_edge(pydot.Edge(node, desc_node, color=desc_arrow))
+        if not all([n==-1 for n in next_progenitors_this]):  #next progenitors in same snapshot but in different fof group
+            next_progs = [nxt for nxt in next_progenitors_this if str(nxt) in node_names_this]
+            next_prog_idxs = [next_progenitors_this.index(nxt) for nxt in next_progenitors_this if str(nxt) in node_names_this]
+            for next_prog, next_prog_idx in zip(next_progs, next_prog_idxs):
+                next_node = nodes_this[node_names_this.index(str(next_prog))]
+                treegraph.add_edge(pydot.Edge(nodes_this[next_prog_idx], next_node, color=next_prog_arrow))
+                next_progenitors_this[next_prog_idx] = -1 #reset to -1
 
-            names_this = [nd.get_name() for nd in nodes_this]
-            #print(names_this)
-            for node, prog in zip(descendent_nodes, progenitors):
-                if (prog != -1):
-                    prog_node = nodes_this[names_this.index(str(prog))]
-                    treegraph.add_edge(pydot.Edge(node, prog_node, color=first_prog_arrow))
-
-            for node, prog in zip(nodes_this, next_progenitors):
-                if (prog != -1):
-                    prog_node = nodes_this[names_this.index(str(prog))]
-                    treegraph.add_edge(pydot.Edge(node, prog_node, color=next_prog_arrow))
-
-        progenitors= tree[FirstProgenitorOffset][locs]
         nodes.append(nodes_this)
+        node_names.append(node_names_this)
         clusters.append(cl_this)
+        first_progenitors.append(first_progenitors_this)
+        next_progenitors.append(next_progenitors_this)
 
+        
+    #check that progenitors are accounted for
+    fp_check = [fp==-1 for sublist in first_progenitors for fp in sublist]
+    np_check = [fp==-1 for sublist in next_progenitors for fp in sublist]
+    if not all(fp_check):
+        print('Error: not all first progenitors found')
+    if not all(np_check):
+        print('Error: not all next progenitors found')
+        
     #write graph
+    #dot_string = treegraph.to_string()
+
     if '.png' in filetype:
-        fn = '../pngfiles/tree_{}.png'.format(treenum)
+        treeid = '{}_{}'.format(treenum, xname) if len(xname) > 0 else treenum
+        fn = '../pngfiles/tree_{}.png'.format(treeid)
+        #fd = '../pngfiles/tree_{}.dot'.format(treeid)
         treegraph.write_png(fn)
+        #treegraph.write_dot(fd)
         print('Wrote {}'.format(fn))
 
-    return treegraph, clusters, nodes
+    return treegraph, clusters, nodes, node_names, first_progenitors, next_progenitors
+
 
 def compare_trees(serialtrees, coretrees):
 
