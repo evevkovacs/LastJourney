@@ -11,6 +11,7 @@ from time import time
 import struct
 from struct import pack
 from struct import unpack, calcsize
+from copy import deepcopy
 
 import matplotlib
 matplotlib.use('Agg')
@@ -32,22 +33,39 @@ cc_template = '{}{}.corepropertiesextend.hdf5'
 binfile_template = 'trees_099.{}'
 
 mkeys = {'AQ':'m_evolved_0.9_0.005',
-        'LJ':'m_evolved_1.1_0.1',
+         'LJ':'m_evolved_1.1_0.1',
        }
 
 outfile_template = re.sub('propertiesextend', 'trees', cc_template)
 
+# trees are built in 2 formats: 'core' and 'lgal'
+core = 'core'
+lgal = 'lgal'
+
+# mode is serial or vector
+
+# define properties from core catalog; also used as names for 'core' tree format
 coretag = 'core_tag'
-foftag = 'fof_halo_tag'
 coremass = 'coremass'
-#infall_fof_mass = 'infall_fof_halo_mass'
 infall_tree_node_mass = 'infall_tree_node_mass'
-first_snap = 499
-last_snap = 43
-#last_snap = 475
-first_row = 0
-last_row = 99 
-#last_row = 2 
+tree_node_mass = 'tree_node_mass'
+fof_halo_mass = 'fof_halo_mass'
+sod_halo_mass = 'sod_halo_mass'
+sod_node_mass = 'sod_node_mass'
+tree_node_index = 'tree_node_index'
+fof_halo_tag = 'fof_halo_tag'
+foftag = tree_node_index   #used to sort fof groups; uses halo fragments
+infall_tree_node_index = 'infall_tree_node_index'
+infall_fof_halo_mass = 'infall_fof_halo_mass'
+infall_sod_halo_mass = 'infall_sod_halo_mass'
+infall_sod_halo_cdelta = 'infall_sod_halo_cdelta'
+infall_sod_halo_radius = 'infall_sod_halo_radius'
+central = 'central'
+timestep = 'timestep'
+infall_step = 'infall_step'
+radius = 'radius'
+
+#define frequently used names for L-Galaxies
 Descendent = 'Descendent'
 FirstProgenitor = 'FirstProgenitor'
 NextProgenitor = 'NextProgenitor'
@@ -63,49 +81,110 @@ NextProgenitorOffset = NextProgenitor + Offset
 FirstHaloInFOFGroupOffset = FirstHaloInFOFGroup + Offset
 NextHaloInFOFGroupOffset = NextHaloInFOFGroup + Offset
 Len = 'Len'
-Zero = 'Zero'
 SnapNum = 'SnapNum'
 M_Crit200 = 'M_Crit200'
+Zero = 'Zero'
+
+first_snap = 499
+last_snap = 43
+#last_snap = 475
+first_row = 0
+last_row = 100 #101 snapshots between 499 and 43 
+#last_row = 2
+
+#properties available in core catalogs
+#central, core_tag, fof_halo_tag, infall_sod_halo_mass, infall_fof_halo_angmom_x,y,z
+#infall_fof_halo_mass, infall_step, infall_fof_halo_max_cir_vel, infall_fof_halo_tag,
+#infall_sod_halo_angmom_x,y,z, infall_sod_halo_max_cir_vel, infall_tree_node_index,
+#infall_tree_node_mass, tree_node_index, vel_disp, vx,y,z, x,y,z, m_evolved_*_*
+#host_core?, radius, merged?
 
 # properties for storing in dict or matrices
-core_pointers = [Descendent, DescendentOffset, FirstProgenitor, NextProgenitor,
-                 FirstProgenitorOffset, NextProgenitorOffset]
+core_pointers = {lgal: [Descendent, DescendentOffset, FirstProgenitor, NextProgenitor,
+                        FirstProgenitorOffset, NextProgenitorOffset],
+                 core: [Descendent, FirstProgenitor, NextProgenitor]
+                } 
 #core_pointers = [Descendent, DescendentOffset, FirstProgenitor, FirstProgenitorOffset]
-sibling_pointers = [FirstHaloInFOFGroup, NextHaloInFOFGroup, FirstHaloInFOFGroupOffset, NextHaloInFOFGroupOffset]
+
+sibling_pointers = {lgal: [FirstHaloInFOFGroup, NextHaloInFOFGroup, FirstHaloInFOFGroupOffset, NextHaloInFOFGroupOffset],
+                    core: [FirstHaloInFOFGroup, NextHaloInFOFGroup],
+                   } 
 #sibling_pointers = []
-core_properties_float = {'Pos_x':'x', 'Pos_y':'y', 'Pos_z':'z',
-                         'Vel_x':'vx', 'Vel_y':'vy', 'Vel_z':'vz',
-                         'VelDisp':'vel_disp',
-                         'Vmax': 'infall_fof_halo_max_cir_vel',
-                         M_Crit200: infall_tree_node_mass,
-                         'M_Mean200': Zero,
-                         'M_TopHat': Zero,
-                         'Spin_x': 'infall_sod_halo_angmom_x',
-                         'Spin_y': 'infall_sod_halo_angmom_y',
-                         'Spin_z': 'infall_sod_halo_angmom_z',
-                         'SubHalfMass': Zero,
-                        }
 
-core_properties_int = {MostBoundID_Coretag:'core_tag',
-                       'FileNr': Zero,
-                       SubhaloIndex: Zero,
-                      }
+read_properties_float = {lgal: {'Pos_x':'x', 'Pos_y':'y', 'Pos_z':'z',
+                                'Vel_x':'vx', 'Vel_y':'vy', 'Vel_z':'vz',
+                                'VelDisp':'vel_disp',
+                                'Vmax': 'infall_fof_halo_max_cir_vel',
+                                M_Crit200: sod_node_mass,
+                                'M_Mean200': Zero,
+                                'M_TopHat': Zero,
+                                'Spin_x': 'infall_sod_halo_angmom_x',
+                                'Spin_y': 'infall_sod_halo_angmom_y',
+                                'Spin_z': 'infall_sod_halo_angmom_z',
+                                'SubHalfMass': Zero,
+                               },
+                         core: {'Pos_x':'x', 'Pos_y':'y', 'Pos_z':'z',
+                                'Vel_x':'vx', 'Vel_y':'vy', 'Vel_z':'vz',
+                                'VelDisp':'vel_disp',
+                                'Vmax': 'infall_fof_halo_max_cir_vel',
+                                infall_tree_node_mass: infall_tree_node_mass,
+                                infall_fof_halo_mass: infall_fof_halo_mass,
+                                infall_sod_halo_mass: infall_sod_halo_mass,
+                                infall_sod_halo_cdelta: infall_sod_halo_cdelta,
+                                infall_sod_halo_radius: infall_sod_halo_radius,
+                                'Spin_x': 'infall_sod_halo_angmom_x',
+                                'Spin_y': 'infall_sod_halo_angmom_y',
+                                'Spin_z': 'infall_sod_halo_angmom_z',
+                                coremass: coremass,
+                                radius: radius,
+                                tree_node_mass: tree_node_mass,
+                                fof_halo_mass: fof_halo_mass,
+                                sod_halo_mass: sod_halo_mass,
+                                sod_node_mass: sod_node_mass,
+                               },
+                        } 
 
-derived_properties_int = [SnapNum, Len, ParentHaloTag]
-#derived_properties_int = [Len]
+derived_properties_float = {lgal: [],
+                            core: [],
+                           } 
 
-# vector properties for storing in matrix
-integer_properties = core_pointers + sibling_pointers + derived_properties_int + list(core_properties_int.keys())
-float_properties = list(core_properties_float.keys())
-#float_properties = [M_Crit200]
+read_properties_int = {lgal: {MostBoundID_Coretag:coretag,
+                              'FileNr': Zero,
+                              SubhaloIndex: Zero,
+                             },
+                       core: {coretag:coretag,
+                              central: central,
+                              tree_node_index: tree_node_index,
+                              infall_tree_node_index: infall_tree_node_index,
+                              infall_step: infall_step,
+                             },
+                      } 
 
-#serial properties for storing in dict
-core_properties = dict(zip(float_properties, [core_properties_float[f] for f in float_properties]))
-core_properties.update(core_properties_int)
-derived_properties = derived_properties_int
+derived_properties_int = {lgal: [SnapNum, Len, ParentHaloTag],
+                          core: [timestep, ParentHaloTag],
+                         }
+properties_int32 = [SnapNum, timestep, infall_step, central]
+
+def assemble_properties(fmt, vector=True):
+
+    properties = {}
+    properties['read'] = deepcopy(read_properties_float[fmt])   #need deepcopy so that update doesn't change original dict
+    properties['read'].update(read_properties_int[fmt])
+    properties['derived'] = derived_properties_int[fmt] + derived_properties_float[fmt]
+    properties['float'] = derived_properties_float[fmt] + list(read_properties_float[fmt].keys())
+    properties['int'] = core_pointers[fmt] + sibling_pointers[fmt] + derived_properties_int[fmt] + list(read_properties_int[fmt].keys())
+    properties['pointers'] = core_pointers[fmt] + sibling_pointers[fmt]
+        
+    mode = 'vector' if vector else 'serial'
+    print('Using {} format; assembling {} properties'.format(fmt, mode))
+    print(properties)
+    
+    return properties
 
 no_int = -999
 no_float = -999.
+no_mass = -101.
+
 #masses in #M_sun/h
 particle_masses = {'AQ':1.15e9,
                    'LJ':2.7e9,
@@ -151,7 +230,7 @@ def get_core_snapshot(coredir, snapshot, template=cc_template, sim=default_sim):
 
     return data
 
-def add_coremass_column(corecat, sim=default_sim):
+def add_mass_columns(corecat, sim=default_sim):
     mask = (corecat['central']==1) # get centrals
     central_mass = corecat[infall_tree_node_mass][mask] # get fof mass (possibly fragment)
     corecat[coremass] = corecat[mkeys[sim]] # get evolved masses
@@ -163,8 +242,42 @@ def add_coremass_column(corecat, sim=default_sim):
                                                                                                 np.count_nonzero(mask))) 
         corecat[coremass][mask] = central_mass  #force mass for centrals = tree-node mass
     
+    # now add tree_node masses and fof masses
+    corecat = add_treenode_fof_sod_mass(corecat, mask)
+        
     return corecat
+
+def add_treenode_fof_sod_mass(corecat, mask):
+    tree_index, inverse = np.unique(corecat[tree_node_index], return_inverse=True)
+    assert np.sum(mask)==len(tree_index), 'number of unique halos not equal to number of centrals'
+
+    #get order of tree_node_indexes for centrals (mask selects centrals)
+    central_tree_index, cindex = np.unique(corecat[tree_node_index][mask], return_index=True)
+    assert np.array_equal(tree_index, central_tree_index), 'Mismatch in tree_node_indexes of centrals'
+    # use cindex to reorder central masses in (ascending) unique order
+    for key in [tree_node_mass, fof_halo_mass, sod_halo_mass]:
+        mass = corecat['infall_' + key][mask]
+        unique_ordered_masses = mass[cindex]
+        # reconstruct full array of central-only masses using inverse
+        corecat[key] = unique_ordered_masses[inverse]
+        print('Adding column {} to corecat'.format(key))
+        #check
+        assert np.array_equal(corecat[key][mask], corecat['infall_' + key][mask]), 'Mismatch in masses of centrals'
+        
+    #now assign sod masses if available; otherwise use treenode mass
+    corecat[sod_node_mass] = corecat[tree_node_mass].copy()   #need to copy otherwise column getsa overwritten
+    mask_sod = corecat[sod_halo_mass] > 0 #select valid sod masses
+    nofrag_mask = corecat[fof_halo_tag] > 0
+    mask_sod_nofrag = mask_sod & nofrag_mask
+    mask_sod_frag = mask_sod & ~nofrag_mask
+    #overwrite with valid sod masses that are not fragments
+    corecat[sod_node_mass][mask_sod_nofrag] = corecat[sod_halo_mass][mask_sod_nofrag]
+    #overwrite with valid sod masses multiplied by ratio of fragment mass to fof_halo mass
+    corecat[sod_node_mass][mask_sod_frag] = corecat[sod_halo_mass][mask_sod_frag]*corecat[tree_node_mass][mask_sod_frag]/corecat[fof_halo_mass][mask_sod_frag]
+    print('Adding column {} to corecat'.format(sod_node_mass))
     
+    return corecat
+
 def clean(corecat, sorted_coretags):
     mask = np.in1d(corecat[coretag], sorted_coretags, assume_unique=True)
     print('Truncating core catlog to {}/{} entries'.format(np.count_nonzero(mask),
@@ -174,9 +287,9 @@ def clean(corecat, sorted_coretags):
 
     return corecat
 
-def add_snapshot_to_trees(coretrees, corecat, current_snap, sim, snap_index=0,
+def add_snapshot_to_trees(coretrees, corecat, properties, current_snap, sim, snap_index=0,
                           print_int=100, coretags_fofm=None, argsorted_fofm=None,
-                          sorted_indices=None,
+                          sorted_indices=None, fmt=core,
                           ncore_min=0, ncore_max=None, vector=False): 
 
     assert coretags_fofm is not None, "No sibling-ordered tags supplied"
@@ -222,16 +335,18 @@ def add_snapshot_to_trees(coretrees, corecat, current_snap, sim, snap_index=0,
             #define/reorder property
             atime1 = time()
             prop_values = get_ordered_property(p, corecat, sorted_indices_this,
-                                               snap_index, current_snap,
+                                               snap_index, current_snap, properties, 
                                                first_siblings, next_siblings, foftags_fofm_this,
-                                               particle_mass=particle_masses[sim])
+                                               fmt=fmt, particle_mass=particle_masses[sim])
             atimes.append((time()-atime1)/60.)
             #fill row of property matrix with values for selected entries
             v[snap_index][locations_this] = prop_values
-
+            #print('Sample value {}: {}'.format(p, v[snap_index][locations_this[0]]))
+            
         # fix first progenitors
         coretrees[FirstProgenitor] = fix_firstprogenitor_vector(coretrees[FirstProgenitor], snap_index)
-        coretrees[FirstProgenitorOffset] = fix_firstprogenitor_vector(coretrees[FirstProgenitorOffset], snap_index)
+        if fmt == lgal:
+            coretrees[FirstProgenitorOffset] = fix_firstprogenitor_vector(coretrees[FirstProgenitorOffset], snap_index)
         
         print('Time to fill coretree arrays = {:.2g} minutes'.format((time() - ptime1)/60.))
 
@@ -277,10 +392,10 @@ def add_snapshot_to_trees(coretrees, corecat, current_snap, sim, snap_index=0,
                     next_sibling = siblings[ns+1] if ns < len(siblings)-1 else -1
                     if not coretrees or s not in list(coretrees.keys()): #first snapshot or first instance of s
                         coretrees[s] = {}
-                    coretrees[s] = add_properties_to_tree(s, loc, coretrees[s], corecat,
+                    coretrees[s] = add_properties_to_tree(s, loc, coretrees[s], corecat, properties,
                                                           next_sibling, siblings[0],
                                                           snap_index, current_snap, p,
-                                                          particle_mass=particle_masses[sim])
+                                                          fmt=fmt, particle_mass=particle_masses[sim])
                 atimes.append((time()-atime1)/60.)
                 if npar % print_int == 0 and npar > 0:
                     print('Time to loop over {} parents = {:.2g} minutes'.format(npar, (time() - ptime1)/60.))
@@ -363,9 +478,11 @@ def fix_firstprogenitor_vector(first_progenitor, row):
         first_progenitor[row-1][mask] = -1 #overwrite
     return first_progenitor
 
-def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap,
-                         first_siblings, next_siblings, parent_tags, particle_mass=particle_masses[default_sim]):
+def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap, properties,
+                         first_siblings, next_siblings, parent_tags,
+                         fmt=core, particle_mass=particle_masses[default_sim]):
     ncores = len(corecat[coretag]) # = len(sorted_indices_this)
+    # assign pointers
     if Descendent in p:
         prop_values = np.array([row - 1]*ncores) #row = row of matrix array
     elif FirstProgenitor in p:
@@ -376,33 +493,39 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap,
         prop_values = first_siblings
     elif NextHaloInFOFGroup in p:
         prop_values = next_siblings
+    # assign derived properties
     elif SnapNum in p:
         #prop_values = np.array([current_snap]*ncores)
         prop_values = np.array([last_row - row]*ncores) #L-galaxies needs consecutive integers
-    elif 'FileNr' in p:
-        prop_values = np.array([0]*ncores)
+    elif timestep in p:
+        prop_values = np.array([current_snap]*ncores)
     elif ParentHaloTag in p:
         prop_values = parent_tags
     elif Len in p:
          prop_values = np.round(corecat[coremass][sorted_indices_this]/particle_mass).astype(int) #truncate
          mask = (prop_values == 0)
          prop_values[mask] = 1  #ensure non-zero values
-    elif p in list(core_properties_int.keys()):
-        if Zero in core_properties_int[p]:
+    elif p in properties['int']:
+        if Zero in properties['read'][p]:
             prop_values = np.zeros(ncores).astype(int)
         else:
-            prop_values = corecat[core_properties_int[p]][sorted_indices_this] # reorder into sorted coretag order
-    elif p in list(core_properties_float.keys()):
-        if Zero in core_properties_float[p]:  #zero values
+            prop_values = corecat[properties['read'][p]][sorted_indices_this] # reorder into sorted coretag order
+            #print('Prop values for {}: {} {} from corecat {} {}'.format(p, prop_values.dtype, prop_values[0],
+            #                                                            corecat[properties['read'][p]].dtype,
+            #                                                            corecat[properties['read'][p]][0]))
+    elif p in properties['float']:
+        if Zero in properties['read'][p]:  #zero values
             prop_values = np.zeros(ncores)
         else:
-            prop_values = corecat[core_properties_float[p]][sorted_indices_this] # reorder into sorted coretag order
+            prop_values = corecat[properties['read'][p]][sorted_indices_this] # reorder into sorted coretag order
             if 'M_Crit' in p:
                 mask = (corecat['central'][sorted_indices_this]==0) # select non-centrals
                 prop_values[mask] = 0.   # set satellite masses to 0.
                 prop_values[~mask] /= particle_mass
-            if 'Spin' in p:
-                prop_values /= corecat[infall_tree_node_mass][sorted_indices_this]
+            if 'Spin' in p:  #normalize by infall_sod_halo mass
+                sod_mask = corecat[infall_sod_halo_mass][sorted_indices_this] > 0  #find valid mass entries
+                prop_values[sod_mask] /= corecat[infall_sod_halo_mass][sorted_indices_this][sod_mask]
+                prop_values[~sod_mask] = no_mass
                 
     else:
         print('Unknown property {}'.format(p))
@@ -412,29 +535,32 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap,
 
 # fix serial trees first progenitors
 #@numba.jit(nopython=True)
-def fix_first_progenitors(coretrees, coretags_not_this, snap_index):
+def fix_first_progenitors(coretrees, coretags_not_this, snap_index, fmt=core):
 
     for s in coretags_not_this:  #loop thru trees without entry in this snapshot
         if len(coretrees[s][FirstProgenitor]) == snap_index: #but have entry in last snapshot
             coretrees[s][FirstProgenitor][-1] = -1 #overwrite last element in list
-            coretrees[s][FirstProgenitorOffset][-1] = -1
+            if fmt == lgal:
+                coretrees[s][FirstProgenitorOffset][-1] = -1
             
     return coretrees
 
 #@numba.jit(nopython=True)
-def add_properties_to_tree(core_tag, location, coretree, corecat,
+def add_properties_to_tree(core_tag, location, coretree, corecat, properties,
                            next_sibling, first_sibling, snap_index,
-                           current_snap, parent_fof_tag, particle_mass=particle_masses[default_sim]):
+                           current_snap, parent_fof_tag,
+                           fmt=core, particle_mass=particle_masses[default_sim]):
     if not coretree:  # empty - first entry
         coretree[Descendent] = [-1] # no descendent for first halo
-        coretree[DescendentOffset] = [-1] # no descendent for first halo
         coretree[FirstProgenitor] = [1] # will be next element (if it exists)
         coretree[NextProgenitor] = [-1] # no Next_Progenitor since cores are unmerged
-        coretree[FirstProgenitorOffset] = [1] # will be next element (if it exists)
-        coretree[NextProgenitorOffset] = [-1] # no Next_Progenitor since cores are unmerged
+        if fmt == lgal:
+            coretree[DescendentOffset] = [-1] # no descendent for first halo
+            coretree[FirstProgenitorOffset] = [1] # will be next element (if it exists)
+            coretree[NextProgenitorOffset] = [-1] # no Next_Progenitor since cores are unmerged
         
         # initialize empty lists for properties
-        for p in sibling_pointers + list(core_properties.keys()) + derived_properties:
+        for p in sibling_pointers + list(properties['read'].keys()) + derived_properties:
             coretree[p] = []
     else:
         # descendent will be next core unless in snap 499
@@ -454,19 +580,22 @@ def add_properties_to_tree(core_tag, location, coretree, corecat,
     # add supplied properties; locations in other trees not known yet
     coretree[FirstHaloInFOFGroup].append(first_sibling)
     coretree[NextHaloInFOFGroup].append(next_sibling)
-    coretree[FirstHaloInFOFGroupOffset].append(first_sibling)
-    coretree[NextHaloInFOFGroupOffset].append(next_sibling)
+    if fmt == lgal:
+        coretree[FirstHaloInFOFGroupOffset].append(first_sibling)
+        coretree[NextHaloInFOFGroupOffset].append(next_sibling)
     # other properties
-    if SnapNum in derived_properties:
-        #coretree[SnapNum].append(current_snap)
+    if SnapNum in properties['derived']:
         coretree[SnapNum].append(last_row - snap_index)
-    if ParentHaloTag in derived_properties:  
+    if timestep in properties['derived']:
+        coretree[timestep].append(current_snap)
+    if ParentHaloTag in properties['derived']:  
         coretree[ParentHaloTag].append(parent_fof_tag)
-    coretree[Len].append(int(max(np.round(corecat[coremass][location]/particle_mass), 1.))) #set min mass to 1 particle
+    if Len in properties['derived']:
+        coretree[Len].append(int(max(np.round(corecat[coremass][location]/particle_mass), 1.))) #set min mass to 1 particle
     
-    for p, v in core_properties.items():
+    for p, v in properties['read'].items():
         if Zero in v:
-            if p in core_properties_int:
+            if p in properties['int']:
                 coretree[p].append(0)
             else:
                 coretree[p].append(0.)
@@ -478,8 +607,10 @@ def add_properties_to_tree(core_tag, location, coretree, corecat,
                 else:
                     coretree[p][-1] /= particle_mass
             if 'Spin' in p:
-                coretree[p][-1] /= corecat[infall_tree_node_mass][location] # divide by mass
-                
+                if corecat[infall_sod_mass] > 0:
+                    coretree[p][-1] /= corecat[infall_sod_halo_mass][location] # divide by mass
+                else:
+                    coretree[p][-1] = no_mass
     return coretree
 
 def get_parent_boundary(foftags, loc, ncores, name='input', upper=True):
@@ -807,17 +938,19 @@ def main(argv):
     if type(argv) == list:
         argv = dict(zip(np.arange(0, len(argv)), argv))
     print('Inputs:',argv)
+    name = argv.get(0, 'test')    
     vector = True if argv.get(1, 'vector')=='vector' else False
     nfiles = int(argv.get(2, 3))   #number of files to write
-    print_int = int(argv.get(3, 1000)) #for serial code
-    ncore_min = int(argv.get(4, 0))    #for serial code
-    ncore_max = int(argv.get(5, 67760)) #for serial code (number of cores)/100
-    Nfiles = int(argv.get(6, 10000)) #total number of files for vector code
-    sim = argv.get(7, 'LJ')  # set simulation
-    name = argv.get(0, 'test')
+    fmt = argv.get(3, core) # set format
+    Nfiles = int(argv.get(4, 1000)) #total number of files for vector code
+    print_int = int(argv.get(5, 1000)) #for serial code
+    ncore_min = int(argv.get(6, 0))    #for serial code
+    ncore_max = int(argv.get(7, 67760)) #for serial code (number of cores)/100
+    sim = argv.get(8, 'LJ')  # set simulation
+
     coredir = '../CoreCatalogs_{}'.format(sim)
     outname = '{}_{}'.format(sim, name) if 'test' in name else sim 
-    treedir = '../CoreTrees/fof_group_{}'.format(outname)
+    treedir = '../CoreTrees/fof_group_{}_{}'.format(outname, fmt)
 
     print('Simulation = {}'.format(sim))
     print('Outputs written to {}'.format(treedir))
@@ -830,12 +963,15 @@ def main(argv):
     snapshots = sorted([int(os.path.basename(f).split('.')[0].split('-')[-1]) for f in corefiles], reverse=True)
     coretrees = {}
 
+    #get list of properties depending on format selected
+    properties = assemble_properties(fmt, vector)
+
     for n, s in enumerate(snapshots): #process in descending order
         print('Processing snapshot {}'.format(s))
         stime = time() 
         corecat = get_core_snapshot(coredir, int(s), sim=sim)
         if corecat:
-            corecat = add_coremass_column(corecat, sim=sim)
+            corecat = add_mass_columns(corecat, sim=sim)
             if n == 0:
                 sorted_coretags = np.sort(corecat[coretag]) #save for cleaning earlier snaps
 
@@ -848,10 +984,16 @@ def main(argv):
                 if vector: # initialize dict of matrices
                     print('Setting up ordered arrays and tree matrices')
                     ctime = time()
-                    for p in integer_properties:
-                        coretrees[p] = np.array([no_int]*Ncores*len(snapshots)).reshape(len(snapshots), Ncores)
-                    for p in float_properties:
-                        coretrees[p] = np.array([no_float]*Ncores*len(snapshots)).reshape(len(snapshots), Ncores)
+                    for p in properties['int']:
+                        if p in properties_int32:
+                            coretrees[p] = np.array([no_int]*Ncores*len(snapshots)).reshape(len(snapshots), Ncores).astype(np.int32)
+                        else:
+                            coretrees[p] = np.array([no_int]*Ncores*len(snapshots)).reshape(len(snapshots), Ncores).astype(np.int64)
+                        print('Initial {} value for {}: {}'.format(coretrees[p].dtype, p, coretrees[p][0][0]))
+                    for p in properties['float']:
+                        coretrees[p] = np.array([no_float]*Ncores*len(snapshots)).reshape(len(snapshots), Ncores).astype(np.float64)
+                        #print('Initial value for {}: {:.3g}'.format(p, coretrees[p][0][0]))
+                        
                     print('Time to create arrays = {:.2f} minutes'.format((time() - ctime)/60.))
                     print('Keys are: {}'.format(sorted(list(coretrees.keys()))))
                 else:
@@ -861,10 +1003,10 @@ def main(argv):
                 # clean corecat to remove cores that disappeared before step 499
                 corecat = clean(corecat, sorted_coretags)
             
-            coretrees, atimes, stimes = add_snapshot_to_trees(coretrees, corecat, int(s), sim, snap_index=n,
-                                                              coretags_fofm=coretags_fofm,
+            coretrees, atimes, stimes = add_snapshot_to_trees(coretrees, corecat, properties, int(s), sim,
+                                                              snap_index=n, coretags_fofm=coretags_fofm,
                                                               argsorted_fofm=argsorted_coretags_fofm,
-                                                              sorted_indices=indices_fofm,
+                                                              sorted_indices=indices_fofm, fmt=fmt,
                                                               print_int=print_int, ncore_max=ncore_max,
                                                               ncore_min=ncore_min, vector=vector)
 
@@ -877,7 +1019,7 @@ def main(argv):
                     print('Mean times = {:.3g}(sib); {:.3g}(add)'.format(smean, amean))
                 else:
                     print('Mean times (over {} parents) = {:.3g}(sib); {:.3g}(add)'.format(len(atimes), smean, amean))
-                    
+
         print('Time to run snapshot = {:.2f} minutes'.format((time() - stime)/60.))
         mem = "Memory usage =  {0:.2f} GB"
         print(mem.format(process.memory_info().rss/1.e9))
@@ -885,6 +1027,7 @@ def main(argv):
     del corecat
 
     # TODO merging
+    # TODO truncate for halo trees
     
     # output core trees
     numcores = Ncores if vector else len(list(coretrees.keys()))
@@ -912,17 +1055,19 @@ def main(argv):
             # write binary & hdf5
             write_outfile(fn, coretrees, cores_to_write, vector=vector, start=start, end=end,
                           column_counts=column_counts)
-            write_binary(fn_bin, coretrees, cores_to_write, foftags_to_write,
-                         vector=vector, start=start, end=end, column_counts=column_counts)
+            if fmt == lgal:
+                write_binary(fn_bin, coretrees, cores_to_write, foftags_to_write,
+                             vector=vector, start=start, end=end, column_counts=column_counts)
         start = end
     
-    #return coretrees #for testing
-    # eg to run: serialtrees = build_core_trees.main({0:'test', 1:'serial', 2:2, 3:500, 4:0, 5:500})
-    # coretrees = build_core_trees.main({0:'test', 1:'vector', 2:2})
-    # coretrees = build_core_trees.main({0:'test', 1:'vector', 2:1, 3:500, 4:0, 5:500, 6:1, 7:'LJ'})  #write out 1 file
-    # testtree = build_core_trees.main({0:'test', 1:'serial', 2:1, 3:400, 4:246, 5:247})
+    # eg to run: serialtrees = build_core_trees.main({0:'test', 1:'serial', 2:2, 3:'lgal', 4:1000, 5:500, 6:0, 7:500})
+    # binary write only for lgal format
+    # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:2})
+    # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:1, 3:'core': 4:20, 5:500, 6:0, 7:500, 8:'LJ'})  #write out 1/20 files
+    # testtree = build_core_trees.main({0:'test_lgal', 1:'serial', 2:1, 3:'lgal', 4:1000, 5:400, 6:246, 7:247})
     # eg to run from command line
-    # python build_core_trees.py vector 1 500 0 500 1 LJ |& tee ../logfiles/LJ_v0.1.log
+    # python build_core_trees.py vector 2 lgal 20 500 0 500 LJ |& tee ../logfiles/LJ_v0.2_lgal.log
+    # python build_core_trees.py vector 1 core 1 500 0 500 LJ |& tee ../logfiles/LJ_v0.2_core_all_11_06.log #write 1 file
     if 'test' in name:
         return coretrees
     else:
@@ -1186,6 +1331,6 @@ def compare_trees(serialtrees, coretrees):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print('USAGE: %s vector/serial <# tree files to write (def=3)> <print_int (def=1000) (serial only)> <ncore_min (def=0) (serial only)> <ncore_max (def=67770) (serial only) <Total # files for all trees (def=10000) (vector only)>' % sys.argv[0])
+        print('USAGE: %s vector/serial <# tree files to write (def=3)> <tree format (core or lgal)> <Total # files for all trees (def=10000) (vector only)> <print_int (def=1000) (serial only)> <ncore_min (def=0) (serial only)> <ncore_max (def=67770) (serial only) <sim type (def=LJ)>' % sys.argv[0])
     else:
         main(sys.argv)
