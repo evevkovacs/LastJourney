@@ -12,6 +12,7 @@ import struct
 from struct import pack
 from struct import unpack, calcsize
 from copy import deepcopy
+import pygio
 
 import matplotlib
 matplotlib.use('Agg')
@@ -24,19 +25,23 @@ from matplotlib import rc
 rc('font',**{'family':'sans-serif','sans-serif':['Helvetica']})
 rc('text', usetex=True)
 
-default_sim = 'LJ'
+default_sim = 'SV'
 
 filenames = {'AQ':'',
-             'LJ':'m000p-',
+             'SV':'m000p-',
+             'HM':'',
             }
-cc_template = '{}{}.corepropertiesextend.hdf5'
+
+cc_template = {'AQ':'{}{}.corepropertiesextend.hdf5',
+               'SV':'{}{}.corepropertiesextend.hdf5',
+               'HM':'{}{}.coreproperties',
+              } 
 binfile_template = 'trees_099.{}'
 
 mkeys = {'AQ':'m_evolved_0.9_0.005',
-         'LJ':'m_evolved_1.1_0.1',
-       }
-
-outfile_template = re.sub('propertiesextend', 'trees', cc_template)
+         'SV':'m_evolved_1.1_0.1',
+         'HM':'m_evolved',
+        }
 
 # trees are built in 2 formats: 'core' and 'lgal'
 core = 'core'
@@ -60,6 +65,9 @@ infall_fof_halo_mass = 'infall_fof_halo_mass'
 infall_sod_halo_mass = 'infall_sod_halo_mass'
 infall_sod_halo_cdelta = 'infall_sod_halo_cdelta'
 infall_sod_halo_radius = 'infall_sod_halo_radius'
+infall_fof_halo_angmom = 'infall_fof_halo_angmom_'
+infall_sod_halo_angmom = 'infall_sod_halo_angmom_'
+
 central = 'central'
 timestep = 'timestep'
 infall_step = 'infall_step'
@@ -126,15 +134,16 @@ read_properties_float = {lgal: {'Pos_x':'x', 'Pos_y':'y', 'Pos_z':'z',
                          core: {'Pos_x':'x', 'Pos_y':'y', 'Pos_z':'z',
                                 'Vel_x':'vx', 'Vel_y':'vy', 'Vel_z':'vz',
                                 'VelDisp':'vel_disp',
-                                'Vmax': 'infall_fof_halo_max_cir_vel',
+                                'Vmax_fof': 'infall_fof_halo_max_cir_vel',
+                                'Vmax_sod': 'infall_sod_halo_max_cir_vel',
                                 infall_tree_node_mass: infall_tree_node_mass,
                                 infall_fof_halo_mass: infall_fof_halo_mass,
                                 infall_sod_halo_mass: infall_sod_halo_mass,
                                 infall_sod_halo_cdelta: infall_sod_halo_cdelta,
                                 infall_sod_halo_radius: infall_sod_halo_radius,
-                                'Spin_x': 'infall_sod_halo_angmom_x',
-                                'Spin_y': 'infall_sod_halo_angmom_y',
-                                'Spin_z': 'infall_sod_halo_angmom_z',
+                                infall_fof_halo_angmom+'x': infall_sod_halo_angmom+'x',
+                                infall_fof_halo_angmom+'y': infall_sod_halo_angmom+'y',
+                                infall_fof_halo_angmom+'z': infall_sod_halo_angmom+'z',
                                 coremass: coremass,
                                 radius: radius,
                                 tree_node_mass: tree_node_mass,
@@ -154,6 +163,7 @@ read_properties_int = {lgal: {MostBoundID_Coretag:coretag,
                              },
                        core: {coretag:coretag,
                               central: central,
+                              fof_halo_tag: fof_halo_tag,
                               tree_node_index: tree_node_index,
                               infall_tree_node_index: infall_tree_node_index,
                               infall_step: infall_step,
@@ -161,7 +171,7 @@ read_properties_int = {lgal: {MostBoundID_Coretag:coretag,
                       } 
 
 derived_properties_int = {lgal: [SnapNum, Len, ParentHaloTag],
-                          core: [timestep, ParentHaloTag],
+                          core: [timestep],
                          }
 properties_int32 = [SnapNum, timestep, infall_step, central]
 
@@ -184,12 +194,57 @@ def assemble_properties(fmt, vector=True):
 no_int = -999
 no_float = -999.
 no_mass = -101.
+M_Crit_norm = 1.e10
 
 #masses in #M_sun/h
-particle_masses = {'AQ':1.15e9,
+particle_numbers = {'LJ':10752,
+                    'SV':1024,
+                    'HM':3072,
+                    'AQ':1024,
+                   }
+box_size = {'LJ':3400,
+            'SV':250,
+            'HM':250,
+            'AQ':256,
+           }
+
+planck_cdm = 0.26067
+planck_wb = 0.02242
+planck_h = .6766
+wmap_cdm = .220
+wmap_wb = 0.02258
+wmap_h = 0.71
+G_SI = 6.67430e-11 #SI m^3 kg^-1 s^-2
+Msun = 1.989e30 #kg
+Mpc = 3.086e22 #m
+#G = 4.3e-9 #Mpc km^2 s^-2 M⊙^-1
+G = G_SI*1e-6*Msun/Mpc
+#rho_c = 3*1e4/(8.*np.pi*G)  #Msun/h Mpc^-3 h^3
+rho_c = 2.77536627e11
+
+Omega_m = {'LJ':planck_cdm + planck_wb/planck_h**2,
+           'SV':planck_cdm + planck_wb/planck_h**2,
+           'HM':planck_cdm + planck_wb/planck_h**2,
+           'AQ':wmap_cdm + wmap_wb/wmap_h**2,
+          }
+
+# 8.6e8 Msun/h for Millennium I, 6.9e6 Msun/h for Millennium II
+particle_masses = {'MTII':6.88e6,
+                   'MTI':2.6e8,
+                   'SV':1.3e9,
                    'LJ':2.7e9,
-                   'MT':6.88e6,
+                   'AQ':1.2e9,
                   } 
+
+def get_particle_mass(sim):
+    if sim in Omega_m.keys():
+        Om_0 = Omega_m[sim]
+        mass = Om_0*rho_c*(float(box_size[sim])/float(particle_numbers[sim]))**3
+        print('Using derived {} particle mass = {:.9e}\n'.format(sim, mass))
+    else:
+        mass = particle_masses[sim]
+        print('Cannot compute mass exactly; using approximate assigned value for {} = {:.2e}\n'.format(sim, mass))
+    return mass
 
 # header file contains Ntrees, totNHalos, TreeNHalos
 header_format = "<{}i"
@@ -216,12 +271,16 @@ struct_format = "<iiiiiifq"
 """
 
 # cc = build_core_trees.get_core_snapshot( '../CoreCatalogs', snapshot)
-def get_core_snapshot(coredir, snapshot, template=cc_template, sim=default_sim):
-    fn = os.path.join(coredir, cc_template.format(filenames[sim], snapshot))
+def get_core_snapshot(coredir, snapshot, template=cc_template[default_sim], sim=default_sim):
+    fn = os.path.join(coredir, template.format(filenames[sim], snapshot))
     data= {}
     if os.path.exists(fn):
-        h5 = h5py.File(fn, 'r')
-        coredata = h5['coredata']
+        if sim == 'HM':
+            coredata = pygio.read_genericio("fn")
+        else:
+            h5 = h5py.File(fn, 'r')
+            coredata = h5['coredata']
+
         keys = [k for k in list(coredata.keys()) if 'm_evolved' not in k]    
         for k in keys + [mkeys[sim]]:
             data[k] = coredata[k][()]
@@ -233,13 +292,14 @@ def get_core_snapshot(coredir, snapshot, template=cc_template, sim=default_sim):
 def add_mass_columns(corecat, sim=default_sim):
     mask = (corecat['central']==1) # get centrals
     central_mass = corecat[infall_tree_node_mass][mask] # get fof mass (possibly fragment)
-    corecat[coremass] = corecat[mkeys[sim]] # get evolved masses
-    # the mass of centrals are not modeled by mass model 
-    central_massmodel = corecat[coremass][mask]
-    check_mass = np.count_nonzero(~np.isclose(central_mass, central_massmodel)) #check if any entries don't agree
-    if check_mass > 0:
-        print('Mass model != tree-node mass for central cores in {}/{} entries'.format(check_mass,
-                                                                                                np.count_nonzero(mask))) 
+    if mkeys[sim] in corecat.keys():
+        corecat[coremass] = corecat[mkeys[sim]] # get evolved masses
+        # the mass of centrals are not modeled by mass model 
+        central_massmodel = corecat[coremass][mask]
+        check_mass = np.count_nonzero(~np.isclose(central_mass, central_massmodel)) #check if any entries don't agree
+        if check_mass > 0:
+            print('Mass model != tree-node mass for central cores in {}/{} entries'.format(check_mass,
+                                                                                           np.count_nonzero(mask))) 
         corecat[coremass][mask] = central_mass  #force mass for centrals = tree-node mass
     
     # now add tree_node masses and fof masses
@@ -521,7 +581,7 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap, pro
             if 'M_Crit' in p:
                 mask = (corecat['central'][sorted_indices_this]==0) # select non-centrals
                 prop_values[mask] = 0.   # set satellite masses to 0.
-                prop_values[~mask] /= particle_mass
+                prop_values[~mask] /= M_Crit_norm
             if 'Spin' in p:  #normalize by infall_sod_halo mass
                 sod_mask = corecat[infall_sod_halo_mass][sorted_indices_this] > 0  #find valid mass entries
                 prop_values[sod_mask] /= corecat[infall_sod_halo_mass][sorted_indices_this][sod_mask]
@@ -605,7 +665,7 @@ def add_properties_to_tree(core_tag, location, coretree, corecat, properties,
                 if corecat['central'][location] == 0:
                     coretree[p][-1] = 0.  #overwrite last entry with zero for satellite
                 else:
-                    coretree[p][-1] /= particle_mass
+                    coretree[p][-1] /= M_Crit_norm
             if 'Spin' in p:
                 if corecat[infall_sod_mass] > 0:
                     coretree[p][-1] /= corecat[infall_sod_halo_mass][location] # divide by mass
@@ -944,15 +1004,21 @@ def main(argv):
     fmt = argv.get(3, core) # set format
     Nfiles = int(argv.get(4, 1000)) #total number of files for vector code
     print_int = int(argv.get(5, 1000)) #for serial code
-    ncore_min = int(argv.get(6, 0))    #for serial code
-    ncore_max = int(argv.get(7, 67760)) #for serial code (number of cores)/100
-    sim = argv.get(8, 'LJ')  # set simulation
+    ncore_min = int(argv.get(6, 0))    #for serial code/HM code
+    ncore_max = int(argv.get(7, 67760)) #for serial code/HM code (number of cores)/100 #33005401 in HM (~5x LV-SJ)
+    sim = argv.get(8, 'SV')  # set simulation
 
     coredir = '../CoreCatalogs_{}'.format(sim)
     outname = '{}_{}'.format(sim, name) if 'test' in name else sim 
     treedir = '../CoreTrees/fof_group_{}_{}'.format(outname, fmt)
-
+    #setup output file template
+    outfile_template = re.sub('properties', 'trees', cc_template[sim])
+    outfile_template = re.sub('extend', '', outfile_template)
+    outfile_template = outfile_template + '.hdf5' if 'hdf5' not in outfile_template else outfile_template
+    
     print('Simulation = {}'.format(sim))
+    #evaluate exact particle mass
+    particle_masses[sim] = get_particle_mass(sim)
     print('Outputs written to {}'.format(treedir))
     print('Writing {} file(s) out of a total of {}'.format(nfiles, Nfiles))
     print('Reading core catalog from {}'.format(coredir))
@@ -969,9 +1035,10 @@ def main(argv):
     for n, s in enumerate(snapshots): #process in descending order
         print('Processing snapshot {}'.format(s))
         stime = time() 
-        corecat = get_core_snapshot(coredir, int(s), sim=sim)
+        corecat = get_core_snapshot(coredir, int(s), sim=sim, template=cc_template[sim])
         if corecat:
-            corecat = add_mass_columns(corecat, sim=sim)
+            if sim != 'HM':
+                corecat = add_mass_columns(corecat, sim=sim)
             if n == 0:
                 sorted_coretags = np.sort(corecat[coretag]) #save for cleaning earlier snaps
 
@@ -1063,11 +1130,11 @@ def main(argv):
     # eg to run: serialtrees = build_core_trees.main({0:'test', 1:'serial', 2:2, 3:'lgal', 4:1000, 5:500, 6:0, 7:500})
     # binary write only for lgal format
     # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:2})
-    # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:1, 3:'core': 4:20, 5:500, 6:0, 7:500, 8:'LJ'})  #write out 1/20 files
+    # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:1, 3:'core': 4:20, 5:500, 6:0, 7:500, 8:'SV'})  #write out 1/20 files
     # testtree = build_core_trees.main({0:'test_lgal', 1:'serial', 2:1, 3:'lgal', 4:1000, 5:400, 6:246, 7:247})
     # eg to run from command line
-    # python build_core_trees.py vector 2 lgal 20 500 0 500 LJ |& tee ../logfiles/LJ_v0.2_lgal.log
-    # python build_core_trees.py vector 1 core 1 500 0 500 LJ |& tee ../logfiles/LJ_v0.2_core_all_11_06.log #write 1 file
+    # python build_core_trees.py vector 2 lgal 20 500 0 500 SV |& tee ../logfiles/SV_v0.2_lgal.log
+    # python build_core_trees.py vector 1 core 1 500 0 500 SV |& tee ../logfiles/SV_v0.2_core_all_11_06.log #write 1 file
     if 'test' in name:
         return coretrees
     else:
@@ -1104,7 +1171,7 @@ def drawforest(trees, treenum, filetype='.png', sim=default_sim, cmap='Purples',
                clmap='Wistia', clfont='black', fof_mass_min=None, fof_mass_max=None, fontcolor='black',
                mass_min=1, mass_max=None, alpha_halo=0.75, alpha_fof=0.5, compressed=True, MTtrees=False, xname=''): #pink_r is too light
 
-    particle_mass=particle_masses[sim]
+    particle_mass=get_particle_mass(sim)
     tree = trees[treenum]
     if mass_max is None or mass_min is None:
         cmass_min, cmass_max = get_mass_limits(trees)
@@ -1214,7 +1281,7 @@ def drawforest(trees, treenum, filetype='.png', sim=default_sim, cmap='Purples',
                     else:
                         print('Error: next halo {} for node {} not found in snap {}'.format(next_node_loc, node.get_name(), snap))
 
-                #add edges for next progenitors in current snap (should account for same fof group instances in LJ trees)
+                #add edges for next progenitors in current snap (should account for same fof group instances in SV trees)
                 if next_prog_loc != -1:
                     if next_prog_loc in locs_in_fof:   #is next progenitor in current snap in this fof_group?
                         np_idx = locs_in_fof.tolist().index(next_prog_loc)  #get its location
@@ -1331,6 +1398,6 @@ def compare_trees(serialtrees, coretrees):
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print('USAGE: %s vector/serial <# tree files to write (def=3)> <tree format (core or lgal)> <Total # files for all trees (def=10000) (vector only)> <print_int (def=1000) (serial only)> <ncore_min (def=0) (serial only)> <ncore_max (def=67770) (serial only) <sim type (def=LJ)>' % sys.argv[0])
+        print('USAGE: %s vector/serial <# tree files to write (def=3)> <tree format (core or lgal)> <Total # files for all trees (def=10000) (vector only)> <print_int (def=1000) (serial only)> <ncore_min (def=0) (serial only)> <ncore_max (def=67770) (serial only) <sim type (def=SV)>' % sys.argv[0])
     else:
         main(sys.argv)
