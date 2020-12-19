@@ -160,6 +160,7 @@ derived_properties_float = {lgal: [],
 read_properties_int = {lgal: {MostBoundID_Coretag:coretag,
                               'FileNr': Zero,
                               SubhaloIndex: Zero,
+                              fof_halo_tag: fof_halo_tag,
                              },
                        core: {coretag:coretag,
                               central: central,
@@ -245,6 +246,23 @@ def get_particle_mass(sim):
         mass = particle_masses[sim]
         print('Cannot compute mass exactly; using approximate assigned value for {} = {:.2e}\n'.format(sim, mass))
     return mass
+
+def get_a(step, nsteps=500, z_in=200, a_fin=1):
+    a_ini = (1./(1.+z_in))
+    a = a_ini + (a_fin-a_ini)/nsteps * (step + 1)
+    #z = 1./a - 1.
+
+    return a
+
+
+a_scaling = {lgal: {'VelDisp':1.,
+                    'Vmax': 0.5,
+                    'Spin_x': 2.,
+                    'Spin_y': 2.,
+                    'Spin_z': 2.,
+                    },
+             core: {},
+            } 
 
 # header file contains Ntrees, totNHalos, TreeNHalos
 header_format = "<{}i"
@@ -542,6 +560,9 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap, pro
                          first_siblings, next_siblings, parent_tags,
                          fmt=core, particle_mass=particle_masses[default_sim]):
     ncores = len(corecat[coretag]) # = len(sorted_indices_this)
+    if fmt == lgal:
+        a = get_a(current_snap)
+
     # assign pointers
     if Descendent in p:
         prop_values = np.array([row - 1]*ncores) #row = row of matrix array
@@ -578,6 +599,7 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap, pro
             prop_values = np.zeros(ncores)
         else:
             prop_values = corecat[properties['read'][p]][sorted_indices_this] # reorder into sorted coretag order
+            #fix normalizations
             if 'M_Crit' in p:
                 mask = (corecat['central'][sorted_indices_this]==0) # select non-centrals
                 prop_values[mask] = 0.   # set satellite masses to 0.
@@ -586,6 +608,8 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap, pro
                 sod_mask = corecat[infall_sod_halo_mass][sorted_indices_this] > 0  #find valid mass entries
                 prop_values[sod_mask] /= corecat[infall_sod_halo_mass][sorted_indices_this][sod_mask]
                 prop_values[~sod_mask] = no_mass
+            if fmt == lgal and p in list(a_scaling[fmt].keys()):
+                prop_values *= a**(a_scaling[fmt][p])
                 
     else:
         print('Unknown property {}'.format(p))
@@ -661,6 +685,7 @@ def add_properties_to_tree(core_tag, location, coretree, corecat, properties,
                 coretree[p].append(0.)
         else:
             coretree[p].append(corecat[v][location])
+            #fix normalizations
             if 'M_Crit' in p:
                 if corecat['central'][location] == 0:
                     coretree[p][-1] = 0.  #overwrite last entry with zero for satellite
@@ -671,6 +696,9 @@ def add_properties_to_tree(core_tag, location, coretree, corecat, properties,
                     coretree[p][-1] /= corecat[infall_sod_halo_mass][location] # divide by mass
                 else:
                     coretree[p][-1] = no_mass
+            if fmt == lgal and p in list(a_scaling[fmt].keys()):
+                coretree[p][-1] *= a**(a_scaling[fmt][p])
+
     return coretree
 
 def get_parent_boundary(foftags, loc, ncores, name='input', upper=True):
@@ -993,6 +1021,7 @@ def replace_sibling_addresses_old(coretrees, col, column_counts):
     
     return coretrees
 
+
 def main(argv):
     #setup parameters
     if type(argv) == list:
@@ -1135,7 +1164,7 @@ def main(argv):
     # eg to run from command line
     # python build_core_trees.py vector 2 lgal 20 500 0 500 SV |& tee ../logfiles/SV_v0.2_lgal.log
     # python build_core_trees.py vector 1 core 1 500 0 500 SV |& tee ../logfiles/SV_v0.2_core_all_11_06.log #write 1 file
-    if 'test' in name:
+    if 'return' in name:
         return coretrees
     else:
         return
