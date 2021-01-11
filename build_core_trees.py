@@ -256,7 +256,10 @@ def get_a(step, nsteps=500, z_in=200, a_fin=1):
 
 
 a_scaling = {lgal: {'VelDisp':1.,
-                    'Vmax': 0.5,
+                    'Vmax': -0.5,
+                    'Vel_x':1.,
+                    'Vel_y':1.,
+                    'Vel_z':1.,
                     'Spin_x': 2.,
                     'Spin_y': 2.,
                     'Spin_z': 2.,
@@ -264,6 +267,13 @@ a_scaling = {lgal: {'VelDisp':1.,
              core: {},
             } 
 
+
+fragment_replace = {lgal: ['Vmax', 'Spin_x', 'Spin_y', 'Spin_z', 'VelDisp'],
+                    core: ['Vmax_fof', 'Vmax_sod',  infall_sod_halo_cdelta,
+                           infall_sod_halo_radius,
+                           infall_fof_halo_angmom+'x', infall_fof_halo_angmom+'y',
+                           infall_fof_halo_angmom+'z'],
+                   } 
 # header file contains Ntrees, totNHalos, TreeNHalos
 header_format = "<{}i"
 
@@ -716,11 +726,20 @@ def get_parent_boundary(foftags, loc, ncores, name='input', upper=True):
     return loc
 
 
-def overwrite_fragment_quantities(coretrees, Nsnaps, replace=['Vmax', 'Spin_x', 'Spin_y', 'Spin_z'], vector=True):
+def overwrite_fragment_quantities(coretrees, Nsnaps, vector=True, replace=[],
+                                  MMF_check=False):
+
+    if replace:
+        print('\nFragment overwrite: replacing values for {}\n'.format(', '.join(replace)))
+    else:
+        print('\nFragment replace: No properties supplied for replacement')
+        return coretrees
+    
     if vector:
         for s in np.arange(0, Nsnaps)[::-1]: #start with earliest snapshot
+            stime = time()
             valid = (coretrees[MostBoundID_Coretag][s] != no_int)  #remove placeholder values
-            maskf = (coretrees[fof_halo_tag][s][valid] < 0)  #find -ve halo tags 
+            maskf = (coretrees[fof_halo_tag][s] < 0) & valid  #find -ve halo tags 
             if np.count_nonzero(maskf) == 0:
                 print('No fragments in {} halos in snapnum {}'.format(np.count_nonzero(valid), s))
                 continue
@@ -729,64 +748,96 @@ def overwrite_fragment_quantities(coretrees, Nsnaps, replace=['Vmax', 'Spin_x', 
                 print('  Fragments in earliest snapshot cannot be updated with earlier values: skipping')
                 continue
             # loop over -ve halo tags, decode and find original halos and  associated cores
-            original_fof_tags = byte_mask(coretrees[fof_halo_tag][s][valid][maskf])
-            frag_tags = shift_tag(coretrees[fof_halo_tag][s][valid][maskf]) 
-            fragment_masses = coretrees[Len][s][valid][maskf]
+            original_fof_tags = byte_mask(coretrees[fof_halo_tag][s][maskf])
+            frag_tags = shift_tag(coretrees[fof_halo_tag][s][maskf]) 
+            fragment_masses = coretrees[Len][s][maskf]
+            fragment_columns = np.where(maskf==True)[0]
             # identify small fragments
             small_frag_mask = (frag_tags > 0)
-            small_frag_halo_tags = original_fof_tags[small_frag_mask]
+            small_frag_columns = fragment_columns[(np.where(small_frag_mask==True)[0])]
             small_frag_masses = fragment_masses[small_frag_mask]
-            coretags = coretrees[MostBoundID_Coretag][s][valid][maskf][small_frag_mask]
+            assert np.array_equal(coretrees[Len][s][small_frag_columns], small_frag_masses), 'Small-fragment masses do not match'
+            small_frag_halo_tags = original_fof_tags[small_frag_mask]
+            #coretags = coretrees[MostBoundID_Coretag][s][maskf][small_frag_mask]
             # replace values
             print('  Processing {} LMFs'.format(np.count_nonzero(small_frag_mask)))
-            missing_mmf = 0
-            for coretag, halo_tag, frag_mass in zip(coretags, small_frag_halo_tags, small_frag_masses):
-                #check that it is a less massive fragment (less massive than fragment 0)
-                mmf_mask = (original_fof_tags == halo_tag) & (frag_tags == 0)
-                if np.count_nonzero(mmf_mask) > 0:
-                    mmf_mass = fragment_masses[mmf_mask][0] #only element in array
-                    mmf_coretag = coretrees[MostBoundID_Coretag][s][valid][maskf][mmf_mask][0]
-                    if mmf_mass < frag_mass:
-                        print('    Warning: MMF with halotag {} and coretag {}  has mass {} < fragment with coretag {} and mass {}'.format(halo_tag,
-                                                                                                                                           mmf_coretag,
-                                                                                                                                           mmf_mass,
-                                                                                                                                           coretag,
-                                                                                                                                           frag_mass))
-                else:
-                    missing_mmf +=1
-                column = np.where(coretrees[MostBoundID_Coretag][s] == coretag)[0][0]  #locate column
-                mask_col = (coretrees[fof_halo_tag][:,column][s+1:Nsnaps] > 0)         #find earlier positive halo_tag locations
-                row = np.where(mask_col == True)[0][0]        #get first location
+            if MMF_check:
+                missing_mmf = 0
+                for halo_tag, frag_mass in zip(small_frag_halo_tags, small_frag_masses):
+                    #check that it is a less massive fragment (less massive than fragment 0)
+                    mmf_mask = (original_fof_tags == halo_tag) & (frag_tags == 0)
+                    if np.count_nonzero(mmf_mask) > 0:
+                        mmf_mass = fragment_masses[mmf_mask][0] #only element in array
+                        mmf_coretag = coretrees[MostBoundID_Coretag][s][maskf][mmf_mask][0]
+                        if mmf_mass < frag_mass:
+                            print('    Warning: MMF with halotag {} and coretag {}  has mass {} < fragment with coretag {} and mass {}'.format(halo_tag,
+                                                                                                                                               mmf_coretag,
+                                                                                                                                               mmf_mass,
+                                                                                                                                               coretag,
+                                                                                                                                               frag_mass))
+                    else:
+                        missing_mmf +=1
+
+                if missing_mmf > 0:
+                    n_small_frag = np.count_nonzero(small_frag_mask)
+                    missing_frac = missing_mmf/np.count_nonzero(maskf)
+                    print('    Warning: Found {}/{} LMFs with no MMF counterpart in snap {}\n    Fraction of all fragments = {:.3g}'.format(missing_mmf,
+                                                                                                                                            np.count_nonzero(small_frag_mask),
+                                                                                                                                            s, missing_frac))
+            rows = np.asarray([no_int]*len(small_frag_columns))
+            previous = 1
+            while any(rows == no_int) and s+previous < Nsnaps: #search earlier rows for positive halo tags
+                halo_tags_prev = coretrees[fof_halo_tag][:,small_frag_columns][s+previous]
+                non_frag_mask = (halo_tags_prev >0) & (rows < 0)
+                non_frags = np.where(non_frag_mask==True)[0]
+                rows[non_frags] = s + previous
                 #overwrite selected quantities with earlier non-fragment value
+                print('    Replacing {} values from snap {}'.format(np.count_nonzero(non_frag_mask), s+previous))
                 for r in replace:
-                    #print('Replacing {} for coretag {} in snap {}: {} -> {}'.format(r, coretag, s,
-                    #                                                                coretrees[r][s][column],
-                    #                                                                coretrees[r][s + 1 + row][column]))
-                    coretrees[r][s][column] = coretrees[r][s + 1 + row][column]
-                    
-            if missing_mmf > 0:
-                n_small_frag = np.count_nonzero(small_frag_mask)
-                missing_frac = missing_mmf/np.count_nonzero(maskf)
-                print('    Warning: Found {}/{} LMFs with no MMF counterpart in snap {}\n    Fraction of all fragments = {:.3g}'.format(missing_mmf,
-                                                                                                                                       np.count_nonzero(small_frag_mask),
-                                                                                                                                       s, missing_frac))
+                    coretrees[r][s][small_frag_columns][non_frag_mask] = coretrees[r][s+previous][small_frag_columns][non_frag_mask]
+                previous += 1
+
+            if any(rows == no_int):
+                print('    Warning: {}/{} LMFs not updated'.format(np.count_nonzero((rows == no_int)), np.count_nonzero(small_frag_mask)))
+
+            print('\nTime to run snapshot {} fragment processing= {:.3g} minutes\n'.format(s, (time() - stime)/60.))
     else:    
-        print('Fragment overwite not implemented yet\n')
+        print('Fragment overwite not implemented yet for serial processing\n')
 
     return coretrees
 
 
-def byte_mask(tag_val, bit_mask=0xffffffffffff): 
-    if (tag_val<0).all() == False:
+def byte_mask(tag_val, bit_mask=0xffffffffffff, warn=False): 
+    if (tag_val<0).all() == False and warn:
         print("Warning: fof tag passed to byte masking routine, this assumes fragment tags only")
     return  (-tag_val)&bit_mask
 
 
-def shift_tag(tag_val, shift=48):
-    if (tag_val<0).all() == False:
+def shift_tag(tag_val, shift=48, warn=False):
+    if (tag_val<0).all() == False and warn:
         print("Warning: fof tag passed to byte masking routine, this assumes fragment tags only")
     return  np.right_shift(-tag_val, 48)
 
+def get_missed_LMFs(coretrees, s, original_fof_tags, frag_tags, small_frag_columns, small_frag_mask):
+    small_frag_halo_tags = original_fof_tags[small_frag_mask]
+    coretags = coretrees[MostBoundID_Coretag][s][small_frag_columns]
+    small_frag_fofs = coretrees[fof_halo_tag][s][small_frag_columns]
+    small_frag_tnis = coretrees[ParentHaloTag][s][small_frag_columns]
+    lmf_tni = []
+    lmf_fof = []
+    lmf_core = []
+    lmf_halo = []
+    print('coretag              tree_node_index      fof_halo_tag    original_fof_tag')
+    for halo_tag, ct, tni, fof in zip(small_frag_halo_tags, coretags, small_frag_tnis, small_frag_fofs):
+        mmf_mask = (original_fof_tags == halo_tag) & (frag_tags == 0)
+        if np.count_nonzero(mmf_mask) == 0:
+            print('{}  {}  {}  {}'.format(ct, tni, fof, halo_tag))
+            lmf_tni.append(tni)
+            lmf_fof.append(fof)
+            lmf_halo.append(halo_tag)
+            lmf_core.append(ct)
+            
+    return lmf_core, lmf_tni, lmf_fof, lmf_halo
 
 def write_outfile(outfile, coretrees, cores_to_write, vector=False, start=None, end=None,
                   column_counts=None):
@@ -1114,10 +1165,11 @@ def main(argv):
     ncore_min = int(argv.get(6, 0))    #for serial code/HM code
     ncore_max = int(argv.get(7, 67760)) #for serial code/HM code (number of cores)/100 #33005401 in HM (~5x LV-SJ)
     sim = argv.get(8, 'SV')  # set simulation
+    outdir = argv.get(9, '')  # extra string for output directory
 
     coredir = '../CoreCatalogs_{}'.format(sim)
     outname = '{}_{}'.format(sim, name) if 'test' in name else sim 
-    treedir = '../CoreTrees/fof_group_{}_{}'.format(outname, fmt)
+    treedir = '../CoreTrees/fof_group_{}_{}{}'.format(outname, fmt, outdir)
     #setup output file template
     outfile_template = re.sub('properties', 'trees', cc_template[sim])
     outfile_template = re.sub('extend', '', outfile_template)
@@ -1194,7 +1246,7 @@ def main(argv):
                 else:
                     print('Mean times (over {} parents) = {:.3g}(sib); {:.3g}(add)'.format(len(atimes), smean, amean))
 
-        print('Time to run snapshot = {:.2f} minutes'.format((time() - stime)/60.))
+        print('\nTime to run snapshot {}= {:.2f} minutes'.format(s, (time() - stime)/60.))
         mem = "Memory usage =  {0:.2f} GB"
         print(mem.format(process.memory_info().rss/1.e9))
         
@@ -1202,7 +1254,10 @@ def main(argv):
 
     # deal with fragments
     # must be done after the first pass through the trees becase we need to use information from earlier timesteps
-    coretrees = overwrite_fragment_quantities(coretrees, len(snapshots), vector=vector)
+    ftime1 = time()
+    coretrees = overwrite_fragment_quantities(coretrees, len(snapshots), vector=vector,
+                                              replace=fragment_replace[fmt])
+    print('\nTime to run fragment processing= {:.2f} minutes'.format((time() - ftime1)/60.))
 
     # TODO merging
     # TODO truncate for halo trees
@@ -1213,7 +1268,7 @@ def main(argv):
     stride = int(np.ceil(numcores/numfiles))
     start = 0 if vector else ncore_min
     mode = '.vector' if vector else '.serial'
-    print('Writing subsets of {} cores in {} files with stride {}'.format(numcores, nfiles, stride))
+    print('\nWriting subsets of {} cores in {} files with stride {}'.format(numcores, nfiles, stride))
     
     for n in range(nfiles):
         fn = os.path.join(treedir, outfile_template.format('', n)+mode)
@@ -1242,10 +1297,12 @@ def main(argv):
     # binary write only for lgal format
     # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:2})
     # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:1, 3:'core': 4:20, 5:500, 6:0, 7:500, 8:'SV'})  #write out 1/20 files
+    # coretrees = build_core_trees.main({0:'test_core', 1:'vector', 2:1, 3:'core': 4:20, 5:500, 6:0, 7:500, 8:'SV', 9:'_devel'})  #write out 1/20 files to devel
     # testtree = build_core_trees.main({0:'test_lgal', 1:'serial', 2:1, 3:'lgal', 4:1000, 5:400, 6:246, 7:247})
     # eg to run from command line
-    # python build_core_trees.py vector 2 lgal 20 500 0 500 SV |& tee ../logfiles/SV_v0.2_lgal.log
-    # python build_core_trees.py vector 1 core 1 500 0 500 SV |& tee ../logfiles/SV_v0.2_core_all_11_06.log #write 1 file
+    # python build_core_trees.py vector 2 lgal 20 500 0 500 SV |& tee ../logfiles/SV_v0.5_lgal.log
+    # python build_core_trees.py vector 1 lgal 20 500 0 500 SV _devel |& tee ../logfiles/SV_v0.5_lgal_01_08_devel.log
+    # python build_core_trees.py vector 1 core 1 500 0 500 SV |& tee ../logfiles/SV_v0.5_core_all_01_09.log #write 1 file
     if 'return' in name:
         return coretrees
     else:
