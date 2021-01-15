@@ -619,7 +619,9 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap, pro
                 prop_values[sod_mask] /= corecat[infall_sod_halo_mass][sorted_indices_this][sod_mask]
                 prop_values[~sod_mask] = no_mass
             if fmt == lgal and p in list(a_scaling[fmt].keys()):
-                prop_values *= a**(a_scaling[fmt][p])
+                afactor = a**(a_scaling[fmt][p])
+                print('  a-scaling {} values by {:.4f}**{:.1f}={:.4g}'.format(p, a, a_scaling[fmt][p], afactor))
+                prop_values *= afactor
                 
     else:
         print('Unknown property {}'.format(p))
