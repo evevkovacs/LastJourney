@@ -36,6 +36,12 @@ cc_template = {'AQ':'{}{}.corepropertiesextend.hdf5',
                'SV':'{}{}.corepropertiesextend.hdf5',
                'HM':'{}{}.coreproperties',
               } 
+
+gio_template = {'AQ':'{}{}.coreproperties',
+                'SV':'{}{}.coreproperties',
+                'HM':'{}{}.coreproperties',
+               } 
+
 binfile_template = 'trees_099.{}'
 
 mkeys = {'AQ':'m_evolved_0.9_0.005',
@@ -67,7 +73,10 @@ infall_sod_halo_cdelta = 'infall_sod_halo_cdelta'
 infall_sod_halo_radius = 'infall_sod_halo_radius'
 infall_fof_halo_angmom = 'infall_fof_halo_angmom_'
 infall_sod_halo_angmom = 'infall_sod_halo_angmom_'
-
+infall_fof_halo_1d_vdisp = 'infall_fof_halo_1D_vdisp'
+infall_sod_halo_1d_vdisp = 'infall_sod_halo_1d_vdisp'
+infall_fof_halo_max_cir_vel = 'infall_fof_halo_max_cir_vel'
+infall_sod_halo_max_cir_vel = 'infall_sod_halo_max_cir_vel'
 central = 'central'
 timestep = 'timestep'
 infall_step = 'infall_step'
@@ -107,6 +116,9 @@ last_row = 100 #101 snapshots between 499 and 43
 #infall_tree_node_mass, tree_node_index, vel_disp, vx,y,z, x,y,z, m_evolved_*_*
 #host_core?, radius, merged?
 
+#properties not available in Imran's core catalaogs + core tag to check ordering
+gio_quantities = [coretag, infall_sod_halo_1d_vdisp, infall_fof_halo_1d_vdisp] 
+
 # properties for storing in dict or matrices
 core_pointers = {lgal: [Descendent, DescendentOffset, FirstProgenitor, NextProgenitor,
                         FirstProgenitorOffset, NextProgenitorOffset],
@@ -121,8 +133,8 @@ sibling_pointers = {lgal: [FirstHaloInFOFGroup, NextHaloInFOFGroup, FirstHaloInF
 
 read_properties_float = {lgal: {'Pos_x':'x', 'Pos_y':'y', 'Pos_z':'z',
                                 'Vel_x':'vx', 'Vel_y':'vy', 'Vel_z':'vz',
-                                'VelDisp':'vel_disp',
-                                'Vmax': 'infall_fof_halo_max_cir_vel',
+                                'VelDisp': infall_sod_halo_1d_vdisp,
+                                'Vmax': infall_sod_halo_max_cir_vel,
                                 M_Crit200: sod_node_mass,
                                 'M_Mean200': Zero,
                                 'M_TopHat': Zero,
@@ -298,13 +310,13 @@ struct_keys = [DescendentOffset, FirstProgenitorOffset, NextProgenitorOffset,
 struct_format = "<iiiiiifq"
 """
 
-# cc = build_core_trees.get_core_snapshot( '../CoreCatalogs', snapshot)
+# corecat = build_core_trees.get_core_snapshot( '../CoreCatalogs_SV', snapshot)
 def get_core_snapshot(coredir, snapshot, template=cc_template[default_sim], sim=default_sim):
     fn = os.path.join(coredir, template.format(filenames[sim], snapshot))
     data= {}
     if os.path.exists(fn):
         if sim == 'HM':
-            coredata = pygio.read_genericio("fn")
+            coredata = pygio.read_genericio(fn)
         else:
             h5 = h5py.File(fn, 'r')
             coredata = h5['coredata']
@@ -316,6 +328,7 @@ def get_core_snapshot(coredir, snapshot, template=cc_template[default_sim], sim=
         print('{} not found'.format(fn))
 
     return data
+
 
 def add_mass_columns(corecat, sim=default_sim):
     mask = (corecat['central']==1) # get centrals
@@ -352,20 +365,46 @@ def add_treenode_fof_sod_mass(corecat, mask):
         #check
         assert np.array_equal(corecat[key][mask], corecat['infall_' + key][mask]), 'Mismatch in masses of centrals'
         
-    #now assign sod masses if available; otherwise use treenode mass
-    corecat[sod_node_mass] = corecat[tree_node_mass].copy()   #need to copy otherwise column getsa overwritten
+    #now assign sod masses if available; otherwise use -101 (change from using tree_node mass because this would mix fof and sod quantities)
+    corecat[sod_node_mass] = corecat[sod_halo_mass].copy()   #need to copy otherwise column gets overwritten
     mask_sod = corecat[sod_halo_mass] > 0 #select valid sod masses
     nofrag_mask = corecat[fof_halo_tag] > 0
     mask_sod_nofrag = mask_sod & nofrag_mask
     mask_sod_frag = mask_sod & ~nofrag_mask
-    #overwrite with valid sod masses that are not fragments
-    corecat[sod_node_mass][mask_sod_nofrag] = corecat[sod_halo_mass][mask_sod_nofrag]
     #overwrite with valid sod masses multiplied by ratio of fragment mass to fof_halo mass
     corecat[sod_node_mass][mask_sod_frag] = corecat[sod_halo_mass][mask_sod_frag]*corecat[tree_node_mass][mask_sod_frag]/corecat[fof_halo_mass][mask_sod_frag]
     print('Adding column {} to corecat'.format(sod_node_mass))
     
     return corecat
 
+
+#eg data= get_gio_core_snapshot(coredir_gio, snapshot, template=cc_template['SV'], sim='SV')
+def get_gio_core_snapshot(coredir, snapshot, gio_quantities_list=gio_quantities, template=gio_template[default_sim], sim=default_sim):
+    fn = os.path.join(coredir, template.format(filenames[sim], snapshot))
+    data = {}
+    if os.path.exists(fn):
+        data = pygio.read_genericio(fn, gio_quantities_list, print_stats=False)
+        print('  Read in quantities {}'.format(', '.join(data.keys())))
+    else:
+        print('{} not found'.format(fn))
+
+    return data
+
+def add_gio_quantities(corecat, coredir, snapshot, gio_quantities_list=gio_quantities, template=gio_template[default_sim], sim=default_sim):
+    # get dict of required extra columns
+    data= get_gio_core_snapshot(coredir, snapshot, gio_quantities_list=gio_quantities_list, template=template, sim=sim)
+    if np.array_equal(corecat[coretag], data[coretag]):
+        print('  Core tag arrays match between core catalog and gio catalog: proceeding')
+        cols_to_add = [k for k in data.keys() if coretag not in k]
+        for k in cols_to_add:
+            corecat[k] = data[k]
+            print('    Adding column {} to corecat'.format(k))
+
+    else:
+        print('Mismatch in coretag columns between extended core catalogs and gio catalogs; not adding columns')
+    
+    return corecat
+    
 def clean(corecat, sorted_coretags):
     mask = np.in1d(corecat[coretag], sorted_coretags, assume_unique=True)
     print('Truncating core catlog to {}/{} entries'.format(np.count_nonzero(mask),
@@ -609,19 +648,36 @@ def get_ordered_property(p, corecat, sorted_indices_this, row, current_snap, pro
             prop_values = np.zeros(ncores)
         else:
             prop_values = corecat[properties['read'][p]][sorted_indices_this] # reorder into sorted coretag order
-            #fix normalizations
+            #fix normalizations for L-Galaxies
             if 'M_Crit' in p:
+                print('  Normalizing M_Crit by {:.2g}'.format(M_Crit_norm))
                 mask = (corecat['central'][sorted_indices_this]==0) # select non-centrals
                 prop_values[mask] = 0.   # set satellite masses to 0.
                 prop_values[~mask] /= M_Crit_norm
-            if 'Spin' in p:  #normalize by infall_sod_halo mass
-                sod_mask = corecat[infall_sod_halo_mass][sorted_indices_this] > 0  #find valid mass entries
-                prop_values[sod_mask] /= corecat[infall_sod_halo_mass][sorted_indices_this][sod_mask]
-                prop_values[~sod_mask] = no_mass
+            if 'Spin' in p:  #normalize by appropriate mass (infall_sod_halo mass or infall_fof_halo_mass)
+                if 'sod' in properties['read'][p]:
+                    sod_mask = corecat[infall_sod_halo_mass][sorted_indices_this] > 0  #find valid mass entries
+                    print('  Normalizing {} by {}/{} valid SOD masses'.format(p, np.count_nonzero(sod_mask), len(sod_mask)))
+                    prop_values[sod_mask] /= corecat[infall_sod_halo_mass][sorted_indices_this][sod_mask]
+                    prop_values[~sod_mask] = no_mass
+                else:
+                    prop_values /= corecat[infall_fof_halo_mass][sorted_indices_this]
+                    
             if fmt == lgal and p in list(a_scaling[fmt].keys()):
                 afactor = a**(a_scaling[fmt][p])
                 print('  a-scaling {} values by {:.4f}**{:.1f}={:.4g}'.format(p, a, a_scaling[fmt][p], afactor))
-                prop_values *= afactor
+                if 'sod' in properties['read'][p]:
+                    sod_mask = corecat[infall_sod_halo_mass][sorted_indices_this] > 0  #find valid entries
+                    print('    Rescaling {}/{} infall_SOD-validated {} values '.format(np.count_nonzero(sod_mask), len(sod_mask)), properties['read'][p])
+                    check_mask = (prop_values != no_mass)  #valid prop values
+                    if  not np.array_equal(check_mask, sod_mask):
+                        print('  Mismatch: {} array has {} valid entries; infall_sod_halo_mass array has {} valid entries'.format(p,
+                                                                                                                                  np.count_nonzero(check_mask),
+                                                                                                                                  np.count_nonzero(sod_mask)))
+                    prop_values[sod_mask] *= afactor
+                    prop_values[~sod_mask] = no_mass
+                else:
+                    prop_values *= afactor
                 
     else:
         print('Unknown property {}'.format(p))
@@ -704,12 +760,22 @@ def add_properties_to_tree(core_tag, location, coretree, corecat, properties,
                 else:
                     coretree[p][-1] /= M_Crit_norm
             if 'Spin' in p:
-                if corecat[infall_sod_mass] > 0:
-                    coretree[p][-1] /= corecat[infall_sod_halo_mass][location] # divide by mass
+                if 'sod' in v:
+                    if corecat[infall_sod_mass] > 0:
+                        coretree[p][-1] /= corecat[infall_sod_halo_mass][location] # divide by mass
+                    else:
+                        coretree[p][-1] = no_mass
                 else:
-                    coretree[p][-1] = no_mass
+                    coretree[p][-1] /= corecat[infall_fof_halo_mass][location]
+                    
             if fmt == lgal and p in list(a_scaling[fmt].keys()):
-                coretree[p][-1] *= a**(a_scaling[fmt][p])
+                if 'sod' in v:
+                    if corecat[infall_sod_mass] > 0:
+                        coretree[p][-1] *= a**(a_scaling[fmt][p])
+                    else:
+                        coretree[p][-1] = no_mass
+                else:
+                    coretree[p][-1] *= a**(a_scaling[fmt][p])
 
     return coretree
 
@@ -1170,6 +1236,7 @@ def main(argv):
     outdir = argv.get(9, '')  # extra string for output directory
 
     coredir = '../CoreCatalogs_{}'.format(sim)
+    coredir_gio = '../CoreCatalogs_{}_gio'.format(sim)
     outname = '{}_{}'.format(sim, name) if 'test' in name else sim 
     treedir = '../CoreTrees/fof_group_{}_{}{}'.format(outname, fmt, outdir)
     #setup output file template
@@ -1194,13 +1261,20 @@ def main(argv):
     properties = assemble_properties(fmt, vector)
 
     for n, s in enumerate(snapshots): #process in descending order
-        print('Processing snapshot {}'.format(s))
+        print('\nProcessing snapshot {}'.format(s))
         stime = time() 
         corecat = get_core_snapshot(coredir, int(s), sim=sim, template=cc_template[sim])
         if corecat:
+            corecat = add_gio_quantities(corecat, coredir_gio, int(s), gio_quantities_list=gio_quantities, sim=sim, template=gio_template[sim])
             if sim != 'HM':
                 corecat = add_mass_columns(corecat, sim=sim)
             if n == 0:
+                #check properties
+                for k, v  in properties['read'].items():
+                    if v is not Zero and v not in corecat.keys():
+                        print('Error: {} not found in core catalog'.format(v))
+                        return
+                    
                 sorted_coretags = np.sort(corecat[coretag]) #save for cleaning earlier snaps
 
                 # sort corecat first by foftag and then coremass so siblings are grouped together
